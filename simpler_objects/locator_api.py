@@ -28,3 +28,18 @@ def find_object(object_path: str):
             continue
         return RedirectResponse(url=server+object_path)
     raise HTTPException(status_code=404)
+
+@app.put("/{object_path}")
+def add_object(object_path: str):
+    """Return a redirect to a server that can handle an object request"""
+    server_to_upload = None
+    for server in object_servers(randomized=True):
+        try:
+            result = requests.head(server + object_path, timeout=1)
+        except requests.exceptions.RequestException:
+            continue
+        if result.status_code != 404:
+            raise HTTPException(status_code=409)
+        if not server_to_upload:
+            server_to_upload = server
+    return RedirectResponse(url=server_to_upload+object_path)

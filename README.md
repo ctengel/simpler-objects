@@ -6,13 +6,28 @@ A simpler object storage service
 For each filesystem/drive
 
 ```
-python -m http.server -d /path/to/objects 46579
+python -m simpler_objects.object_server -d /path/to/objects 46579
 ```
 
 ## Start object locator
 
+Do this once
+
 ```
 OBJECT_SERVERS="http://localhost:46579/" fastapi dev --port 46752 simpler_objects/locator_api.py
+```
+
+## Use
+
+PUT an object
+
+```
+curl -L -T /path/to/file http://localhost:46572/object_key
+```
+
+GET an object:
+```
+curl -L http://localhost:46572/object_key
 ```
 
 ## ObjectIndex
