@@ -1,15 +1,24 @@
 """Simpler Objects Server"""
 
+# based on https://gist.github.com/fabiand/5628006
+
 import argparse
 import pathlib
-from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+import io
+import json
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler, HTTPStatus
 
 class PutHTTPRequestHandler(SimpleHTTPRequestHandler):
     """Extension to basic GET handler that also handles PUT"""
 
     def do_PUT(self):
         """Handle PUT requests"""
-        length = int(self.headers["Content-Length"])
+        try:
+            length = int(self.headers["Content-Length"])
+        except TypeError:
+            self.send_response(400)
+            self.end_headers()
+            return
         path = pathlib.Path(self.translate_path(self.path))
         if path.exists():
             self.send_response(409)
@@ -19,6 +28,40 @@ class PutHTTPRequestHandler(SimpleHTTPRequestHandler):
             dst.write(self.rfile.read(length))
         self.send_response(200)
         self.end_headers()
+
+    def list_directory(self, path):
+        """Override for JSON instead of HTML
+
+        Return value is either a file object, or None (indicating an
+        error).  In either case, the headers are sent, making the
+        interface the same as for send_head().
+
+        """
+        # based on https://github.com/python/cpython/blob/3.13/Lib/http/server.py
+        try:
+            dir_path = pathlib.Path(path)
+        except OSError:
+            self.send_error(
+                HTTPStatus.NOT_FOUND,
+                "No permission to list directory")
+            return None
+        r = {"bucket": self.path,
+             "objects": {}}
+        for name in dir_path.iterdir():
+            if name.is_dir():
+                r['objects'][name.name] = {'directory': True,
+                                           'size': 0}
+            else:
+                r['objects'][name.name] = {'directory': False,
+                                           'size': name.stat().st_size}
+        f = io.BytesIO(json.dumps(r).encode('utf-8'))
+        length = len(f.getvalue())
+        f.seek(0)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-type", "application/json")
+        self.send_header("Content-Length", str(length))
+        self.end_headers()
+        return f
 
 class DirHTTPServer(ThreadingHTTPServer):
     """An HTTP server in a particular directory"""
