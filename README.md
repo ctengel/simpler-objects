@@ -50,6 +50,23 @@ python -m simpler_objects.async_replicate http://localhost:46579/ http://localho
 python -m simpler_objects.async_replicate http://localhost:46580/ http://localhost:46579/
 ```
 
+## Validation
+
+If using objectindex or other software where the beginning of each object name is a hash:
+
+```
+/path/to/objectindex/scripts/gen_cksum_from_filename.py /path/to/bucket
+cd /path/to/bucket
+sha256sum -c ../bucket.sha256sum
+```
+
+## Setting up storage servers
+
+- Ensure your disks are aligned on 4k (or 1MB?) boundaries etc
+- create a seperate user `useradd -m`
+- create buckets at top level with date `mkdir /path/to/bucket-20000101`
+- run in screen
+
 ## ObjectIndex
 
 Optionally on ports 46569 (API) and 46567 (GUI)
