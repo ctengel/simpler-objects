@@ -66,6 +66,7 @@ sha256sum -c ../bucket.sha256sum
 - create a seperate user `useradd -m`
 - create buckets at top level with date `mkdir /path/to/bucket-20000101`
 - run in screen
+- change `fastapi dev` to `fastapi run` for prod
 
 ## ObjectIndex
 
