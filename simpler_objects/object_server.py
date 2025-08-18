@@ -26,7 +26,7 @@ class PutHTTPRequestHandler(SimpleHTTPRequestHandler):
             return
         with open(path, "wb") as dst:
             dst.write(self.rfile.read(length))
-        self.send_response(200)
+        self.send_response(201)
         self.end_headers()
 
     def list_directory(self, path):

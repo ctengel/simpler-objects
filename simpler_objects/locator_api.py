@@ -17,9 +17,10 @@ def object_servers(randomized=False):
         random.shuffle(servers)
     return servers
 
-@app.get("/{object_path}")
-def find_object(object_path: str):
+@app.get("/{bucket}/{key}")
+def find_object(bucket: str, key: str):
     """Return a redirect to an existing object"""
+    object_path = f"{bucket}/{key}"
     for server in object_servers(randomized=True):
         try:
             result = requests.head(server + object_path, timeout=1)
@@ -29,9 +30,10 @@ def find_object(object_path: str):
         return RedirectResponse(url=server+object_path)
     raise HTTPException(status_code=404)
 
-@app.put("/{object_path}")
-def add_object(object_path: str):
+@app.put("/{bucket}/{key}")
+def add_object(bucket: str, key: str):
     """Return a redirect to a server that can handle an object request"""
+    object_path = f"{bucket}/{key}"
     server_to_upload = None
     for server in object_servers(randomized=True):
         try:
