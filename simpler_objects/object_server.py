@@ -6,6 +6,7 @@ import argparse
 import pathlib
 import io
 import json
+import shutil
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler, HTTPStatus
 
 class PutHTTPRequestHandler(SimpleHTTPRequestHandler):
@@ -25,7 +26,8 @@ class PutHTTPRequestHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             return
         with open(path, "wb") as dst:
-            dst.write(self.rfile.read(length))
+            shutil.copyfileobj(self.rfile, dst)
+        assert path.stat().st_size == length
         self.send_response(201)
         self.end_headers()
 
