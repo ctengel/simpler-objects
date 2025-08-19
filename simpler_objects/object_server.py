@@ -6,8 +6,9 @@ import argparse
 import pathlib
 import io
 import json
-import shutil
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler, HTTPStatus
+
+BUFFER = 67108864
 
 class PutHTTPRequestHandler(SimpleHTTPRequestHandler):
     """Extension to basic GET handler that also handles PUT"""
@@ -25,8 +26,14 @@ class PutHTTPRequestHandler(SimpleHTTPRequestHandler):
             self.send_response(409)
             self.end_headers()
             return
+        pos = 0
         with open(path, "wb") as dst:
-            shutil.copyfileobj(self.rfile, dst)
+            while True:
+                nextread = min(BUFFER, length - pos)
+                if not nextread:
+                    break
+                dst.write(self.rfile.read(nextread))
+                pos = pos + nextread
         assert path.stat().st_size == length
         self.send_response(201)
         self.end_headers()
