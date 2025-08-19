@@ -3,6 +3,8 @@
 import argparse
 import requests
 
+TIMEOUT=1024
+
 def get_object_size(obj, skip_404=False):
     """HEAD an object to determine its size"""
     result = requests.head(obj, timeout=1)
@@ -16,10 +18,11 @@ def replicate_object(source, dest):
     size = get_object_size(source)
     assert size
     assert not get_object_size(dest, skip_404=True)
-    with requests.get(source, stream=True, timeout=60) as get:
+    with requests.get(source, stream=True, timeout=TIMEOUT) as get:
         get.raise_for_status()
         assert int(get.headers['Content-Length']) == size
-        put = requests.put(dest, data=get.raw, timeout=60, headers={'Content-Length': str(size)})
+        put = requests.put(dest, data=get.raw, timeout=TIMEOUT,
+                           headers={'Content-Length': str(size)})
         put.raise_for_status()
     assert get_object_size(dest) == size
     return size
