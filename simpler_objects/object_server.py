@@ -7,6 +7,7 @@ import pathlib
 import io
 import json
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler, HTTPStatus
+import shutil
 
 BUFFER = 67108864
 
@@ -15,6 +16,10 @@ class PutHTTPRequestHandler(SimpleHTTPRequestHandler):
 
     def do_PUT(self):
         """Handle PUT requests"""
+        if self.path == '/health':
+            self.send_response(403)
+            self.end_headers()
+            return
         try:
             length = int(self.headers["Content-Length"])
         except TypeError:
@@ -71,6 +76,39 @@ class PutHTTPRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(length))
         self.end_headers()
         return f
+
+    def do_HEAD(self):
+        if self.path == '/health':
+            self.send_response(HTTPStatus.OK)
+            self.end_headers()
+            return
+        super().do_HEAD()
+
+    def healthcheck(self):
+        """Return basic info on node health"""
+        disk_stats = shutil.disk_usage(pathlib.Path(self.translate_path('/')))
+        r = {'read': True,
+             'write': True,
+             'available': disk_stats.free,
+             'percent': int(float(disk_stats.free)/float(disk_stats.total)*100.0)}
+        f = io.BytesIO(json.dumps(r).encode('utf-8'))
+        length = len(f.getvalue())
+        f.seek(0)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-type", "application/json")
+        self.send_header("Content-Length", str(length))
+        self.end_headers()
+        try:
+            self.copyfile(f, self.wfile)
+        finally:
+            f.close()
+
+    def do_GET(self):
+        if self.path == '/health':
+            self.healthcheck()
+            return
+        super().do_GET()
+
 
 class DirHTTPServer(ThreadingHTTPServer):
     """An HTTP server in a particular directory"""
