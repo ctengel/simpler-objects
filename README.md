@@ -14,7 +14,7 @@ python -m simpler_objects.object_server -d /path/to/objects 46579
 Do this once
 
 ```
-OBJECT_SERVERS="http://localhost:46579/" fastapi dev --port 46752 simpler_objects/locator_api.py
+OBJECT_SERVERS="http://localhost:46579/" fastapi dev --port 46572 simpler_objects/locator_api.py
 ```
 
 ## Use
@@ -41,7 +41,7 @@ python -m simpler_objects.object_server -d /path/to/more-objects 46580
 Restart locator with second object server included:
 
 ```
-OBJECT_SERVERS="http://localhost:46579/,http://localhost:46580/" fastapi dev --port 46752 simpler_objects/locator_api.py
+OBJECT_SERVERS="http://localhost:46579/,http://localhost:46580/" fastapi dev --port 46572 simpler_objects/locator_api.py
 ```
 
 Run an asynchronous replication periodically:
