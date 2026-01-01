@@ -8,6 +8,8 @@ import io
 import json
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler, HTTPStatus
 import shutil
+import base64
+import hashlib
 
 BUFFER = 67108864
 
@@ -16,21 +18,37 @@ class PutHTTPRequestHandler(SimpleHTTPRequestHandler):
 
     def do_PUT(self):
         """Handle PUT requests"""
+
+        # no PUT /health
         if self.path == '/health':
             self.send_response(403)
             self.end_headers()
             return
+
+        # parse Content-Length
         try:
             length = int(self.headers["Content-Length"])
         except TypeError:
             self.send_response(400)
             self.end_headers()
             return
+
+        # ensure unique fikename
         path = pathlib.Path(self.translate_path(self.path))
         if path.exists():
             self.send_response(409)
             self.end_headers()
             return
+
+        # parse Digest
+        request_digest = None
+        digest_header = self.headers.get('Repr-Digest')
+        if digest_header:
+            request_digest = base64.b64decode([x.partition('=')[2]
+                                               for x in digest_header.split(',')
+                                               if x.partition('=')[0] == 'sha-256'][0].strip(':'))
+
+        # Receive file
         pos = 0
         with open(path, "wb") as dst:
             while True:
@@ -40,7 +58,29 @@ class PutHTTPRequestHandler(SimpleHTTPRequestHandler):
                 dst.write(self.rfile.read(nextread))
                 pos = pos + nextread
         assert path.stat().st_size == length
+
+        # Hash and compare
+        hash_sha256 = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(BUFFER), b""):
+                hash_sha256.update(chunk)
+        file_digest = hash_sha256.digest()
+        if request_digest and file_digest != request_digest:
+            self.send_response(400)
+            self.end_headers()
+            path.unlink()
+            return
+
+        # write hash to disk
+        bucket = path.parent
+        hash_file = bucket.parent.joinpath(bucket.name).with_suffix('.sha256')
+        cksum_line = f"{file_digest.hex()}  {path.name}\n"
+        with open(hash_file, 'a', encoding='utf-8') as hf:
+            hf.write(cksum_line)
+
+        # send response
         self.send_response(201)
+        self.send_header("Repr-Digest", f"sha-256=:{base64.b64encode(file_digest).decode()}:")
         self.end_headers()
 
     def list_directory(self, path):
