@@ -25,13 +25,13 @@ def healthcheck():
     return r
 
 @app.get("/{bucket}/{key}")
-def get_object(bucket: str, key: str):
+async def get_object(bucket: str, key: str):
     """Handle GET requests"""
     # TODO make this safer
     return FileResponse(pathlib.Path(OBJECT_DIRECTORY).joinpath(bucket).joinpath(key))
 
 @app.put("/{bucket}/{key}")
-def put_object(bucket: str, key: str, request: Request):
+async def put_object(bucket: str, key: str, request: Request):
     """Handle PUT requests"""
 
     # parse Content-Length
@@ -57,7 +57,7 @@ def put_object(bucket: str, key: str, request: Request):
     # Receive file
     with open(path, "wb") as dst:
         # TODO async? check length?
-        for chunk in request.stream():
+        async for chunk in request.stream():
             dst.write(chunk)
     assert path.stat().st_size == length
 

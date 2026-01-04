@@ -6,8 +6,10 @@ A simpler object storage service
 For each filesystem/drive
 
 ```
-python -m simpler_objects.object_server -d /path/to/objects 46579
+OBJECT_DIRECTORY=/path/to/objects fastapi dev --port 46579 simpler_objects/object_server.py
 ```
+
+Alternatively `uvicorn simpler_objects.object_server:app`.
 
 ## Start object locator
 
