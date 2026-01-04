@@ -92,13 +92,16 @@ def list_directory(bucket: str):
         raise HTTPException(status_code=404) from exc
     r = {"bucket": bucket,
          "objects": {}}
-    for name in dir_path.iterdir():
-        if name.is_dir():
-            r['objects'][name.name] = {'directory': True,
-                                       'size': 0}
-        else:
-            r['objects'][name.name] = {'directory': False,
-                                       'size': name.stat().st_size}
+    try:
+        for name in dir_path.iterdir():
+            if name.is_dir():
+                r['objects'][name.name] = {'directory': True,
+                                           'size': 0}
+            else:
+                r['objects'][name.name] = {'directory': False,
+                                           'size': name.stat().st_size}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404) from exc
     return r
 
 
