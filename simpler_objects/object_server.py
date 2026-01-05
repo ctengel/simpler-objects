@@ -13,9 +13,8 @@ app = FastAPI()
 OBJECT_DIRECTORY = os.environ.get('OBJECT_DIRECTORY', '.')
 BUFFER = 67108864
 
-def checksum_filename(path: pathlib.Path):
+def checksum_filename(bucket: pathlib.Path):
     """Determine a bucket checksum file"""
-    bucket = path.parent
     return bucket.parent.joinpath(bucket.name).with_suffix('.sha256')
 
 def object_filename(bucket, key):
@@ -68,7 +67,7 @@ async def get_object(bucket: str, key: str):
     """Handle GET requests"""
     path = object_filename(bucket, key)
     my_cksum = None
-    with open(checksum_filename(path), encoding='utf-8') as fp:
+    with open(checksum_filename(path.parent), encoding='utf-8') as fp:
         for line in fp:
             checksum, file_name = line.strip().split()
             if file_name == key:
@@ -111,7 +110,7 @@ async def put_object(bucket: str, key: str, request: Request):
         raise HTTPException(status_code=400)
 
     # write hash to disk
-    hash_file = checksum_filename(path)
+    hash_file = checksum_filename(path.parent)
     cksum_line = f"{file_digest.hex()}  {path.name}\n"
     with open(hash_file, 'a', encoding='utf-8') as hf:
         hf.write(cksum_line)
@@ -124,22 +123,25 @@ async def put_object(bucket: str, key: str, request: Request):
 @app.get("/{bucket}/")
 def list_directory(bucket: str):
     """List objects in bucket"""
-    try:
-        dir_path = pathlib.Path(OBJECT_DIRECTORY).joinpath(bucket)
-    except OSError as exc:
-        raise HTTPException(status_code=404) from exc
+    dir_path = pathlib.Path(OBJECT_DIRECTORY).joinpath(bucket)
+    if not dir_path.is_dir():
+        raise HTTPException(status_code=404)
     r = {"bucket": bucket,
          "objects": {}}
-    try:
-        for name in dir_path.iterdir():
-            if name.is_dir():
-                r['objects'][name.name] = {'directory': True,
-                                           'size': 0}
-            else:
-                r['objects'][name.name] = {'directory': False,
-                                           'size': name.stat().st_size}
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404) from exc
+    hashes = {}
+    with open(checksum_filename(dir_path), encoding='utf-8') as fp:
+        for line in fp:
+            checksum, file_name = line.strip().split()
+            hashes[file_name] = checksum
+    for name in dir_path.iterdir():
+        if name.is_dir():
+            r['objects'][name.name] = {'directory': True,
+                                        'size': 0,
+                                        'checksum': None}
+        else:
+            r['objects'][name.name] = {'directory': False,
+                                        'size': name.stat().st_size,
+                                        'checksum': hashes.get(name.name)}
     return r
 
 
