@@ -14,6 +14,32 @@ app = FastAPI()
 OBJECT_DIRECTORY = os.environ.get('OBJECT_DIRECTORY', '.')
 BUFFER = 67108864
 
+def parse_digest_header(value: str):
+    """Get the SHA-256 checksum from a Content-Digest or Repr-Digest"""
+    if not value:
+        return None
+    return base64.b64decode([x.partition('=')[2]
+                            for x in value.split(',')
+                            if x.partition('=')[0] == 'sha-256'][0].strip(':'))
+
+def parse_digest_headers(headers: dict):
+    """Get one SHA-256 from multiple headers"""
+    options = set(parse_digest_header(headers.get(x)) for x in ['Repr-Digest', 'Content-Digest'])
+    options.discard(None)
+    if len(options) > 1:
+        raise HTTPException(status_code=400)
+    if len(options) == 0:
+        return None
+    return options.pop()
+
+def file_checksum(path):
+    """Return SHA-256 of a file on disk"""
+    hash_sha256 = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(BUFFER), b""):
+            hash_sha256.update(chunk)
+    return hash_sha256.digest()
+
 @app.get('/health')
 def healthcheck():
     """Return basic info on node health"""
@@ -47,33 +73,24 @@ async def put_object(bucket: str, key: str, request: Request):
         raise HTTPException(status_code=409)
 
     # parse Digest
-    request_digest = None
-    digest_header = request.headers.get('Repr-Digest')
-    if digest_header:
-        request_digest = base64.b64decode([x.partition('=')[2]
-                                           for x in digest_header.split(',')
-                                           if x.partition('=')[0] == 'sha-256'][0].strip(':'))
+    request_digest = parse_digest_headers(request.headers)
 
     # Receive file
     with open(path, "wb") as dst:
-        # TODO async? check length?
+        # TODO async? check length? lock?
         async for chunk in request.stream():
             dst.write(chunk)
     assert path.stat().st_size == length
 
     # Hash and compare
-    hash_sha256 = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(BUFFER), b""):
-            hash_sha256.update(chunk)
-    file_digest = hash_sha256.digest()
+    file_digest = file_checksum(path)
     if request_digest and file_digest != request_digest:
         path.unlink()
         raise HTTPException(status_code=400)
 
     # write hash to disk
-    bucket = path.parent
-    hash_file = bucket.parent.joinpath(bucket.name).with_suffix('.sha256')
+    bucketp = path.parent
+    hash_file = bucketp.parent.joinpath(bucketp.name).with_suffix('.sha256')
     cksum_line = f"{file_digest.hex()}  {path.name}\n"
     with open(hash_file, 'a', encoding='utf-8') as hf:
         hf.write(cksum_line)
