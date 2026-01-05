@@ -10,9 +10,22 @@ from fastapi.responses import FileResponse, Response
 
 app = FastAPI()
 
-# TODO allow spec on command line
 OBJECT_DIRECTORY = os.environ.get('OBJECT_DIRECTORY', '.')
 BUFFER = 67108864
+
+def checksum_filename(path: pathlib.Path):
+    """Determine a bucket checksum file"""
+    bucket = path.parent
+    return bucket.parent.joinpath(bucket.name).with_suffix('.sha256')
+
+def object_filename(bucket, key):
+    """Get the Path of an object"""
+    # TODO make this safer
+    return pathlib.Path(OBJECT_DIRECTORY).joinpath(bucket).joinpath(key)
+
+def http_digest_head(file_digest: bytes) -> str:
+    """Write an http digest header"""
+    return f"sha-256=:{base64.b64encode(file_digest).decode()}:"
 
 def parse_digest_header(value: str):
     """Get the SHA-256 checksum from a Content-Digest or Repr-Digest"""
@@ -53,8 +66,18 @@ def healthcheck():
 @app.get("/{bucket}/{key}")
 async def get_object(bucket: str, key: str):
     """Handle GET requests"""
-    # TODO make this safer
-    return FileResponse(pathlib.Path(OBJECT_DIRECTORY).joinpath(bucket).joinpath(key))
+    path = object_filename(bucket, key)
+    my_cksum = None
+    with open(checksum_filename(path), encoding='utf-8') as fp:
+        for line in fp:
+            checksum, file_name = line.strip().split()
+            if file_name == key:
+                my_cksum = bytes.fromhex(checksum)
+                break
+    headers = None
+    if my_cksum:
+        headers = {"Repr-Digest": http_digest_head(my_cksum)}
+    return FileResponse(path, headers=headers)
 
 @app.put("/{bucket}/{key}")
 async def put_object(bucket: str, key: str, request: Request):
@@ -67,8 +90,7 @@ async def put_object(bucket: str, key: str, request: Request):
         raise HTTPException(status_code=400) from exc
 
     # ensure unique fikename
-    # TODO make this safer
-    path = pathlib.Path(OBJECT_DIRECTORY).joinpath(bucket).joinpath(key)
+    path = object_filename(bucket, key)
     if path.exists():
         raise HTTPException(status_code=409)
 
@@ -89,15 +111,14 @@ async def put_object(bucket: str, key: str, request: Request):
         raise HTTPException(status_code=400)
 
     # write hash to disk
-    bucketp = path.parent
-    hash_file = bucketp.parent.joinpath(bucketp.name).with_suffix('.sha256')
+    hash_file = checksum_filename(path)
     cksum_line = f"{file_digest.hex()}  {path.name}\n"
     with open(hash_file, 'a', encoding='utf-8') as hf:
         hf.write(cksum_line)
 
     # send response
     return Response(status_code=201, content=None,
-                    headers={"Repr-Digest": f"sha-256=:{base64.b64encode(file_digest).decode()}:"})
+                    headers={"Repr-Digest": http_digest_head(file_digest)})
 
 # TODO root bucket list
 @app.get("/{bucket}/")
