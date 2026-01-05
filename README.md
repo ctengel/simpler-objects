@@ -37,7 +37,7 @@ curl -L http://localhost:46572/object_key
 Start up another object server:
 
 ```
-python -m simpler_objects.object_server -d /path/to/more-objects 46580
+OBJECT_DIRECTORY=/path/to/more-objects fastapi dev --port 46580 simpler_objects/object_server.py
 ```
 
 Restart locator with second object server included:
@@ -54,12 +54,15 @@ python -m simpler_objects.async_replicate http://localhost:46580/ http://localho
 
 ## Validation
 
-If using objectindex or other software where the beginning of each object name is a hash:
+```
+cd /path/to/bucket
+sha256sum -c ../bucket.sha256
+```
+
+## Performance test
 
 ```
-/path/to/objectindex/scripts/gen_cksum_from_filename.py /path/to/bucket
-cd /path/to/bucket
-sha256sum -c ../bucket.sha256sum
+./perf_test.sh http://localhost:29171/ big_file small_file
 ```
 
 ## Setting up storage servers
