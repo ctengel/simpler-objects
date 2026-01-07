@@ -6,7 +6,7 @@ A simpler object storage service
 For each filesystem/drive
 
 ```
-OBJECT_DIRECTORY=/path/to/objects fastapi dev --port 46579 simpler_objects/object_server.py
+OBJECT_DIRECTORY=/path/to/objects fastapi dev --port 29171 simpler_objects/object_server.py
 ```
 
 Alternatively `uvicorn simpler_objects.object_server:app`.
@@ -16,7 +16,7 @@ Alternatively `uvicorn simpler_objects.object_server:app`.
 Do this once
 
 ```
-OBJECT_SERVERS="http://localhost:46579/" fastapi dev --port 46572 simpler_objects/locator_api.py
+OBJECT_SERVERS="http://localhost:29171/" fastapi dev --port 29164 simpler_objects/locator_api.py
 ```
 
 ## Use
@@ -24,12 +24,12 @@ OBJECT_SERVERS="http://localhost:46579/" fastapi dev --port 46572 simpler_object
 PUT an object
 
 ```
-curl -L -T /path/to/file http://localhost:46572/object_key
+curl -L -T /path/to/file http://localhost:29164/object_key
 ```
 
 GET an object:
 ```
-curl -L http://localhost:46572/object_key
+curl -L http://localhost:29164/object_key
 ```
 
 ## Replication
@@ -37,19 +37,19 @@ curl -L http://localhost:46572/object_key
 Start up another object server:
 
 ```
-OBJECT_DIRECTORY=/path/to/more-objects fastapi dev --port 46580 simpler_objects/object_server.py
+OBJECT_DIRECTORY=/path/to/more-objects fastapi dev --port 29172 simpler_objects/object_server.py
 ```
 
 Restart locator with second object server included:
 
 ```
-OBJECT_SERVERS="http://localhost:46579/,http://localhost:46580/" fastapi dev --port 46572 simpler_objects/locator_api.py
+OBJECT_SERVERS="http://localhost:29171/,http://localhost:29172/" fastapi dev --port 29164 simpler_objects/locator_api.py
 ```
 
 Run an asynchronous replication periodically:
 ```
-python -m simpler_objects.async_replicate http://localhost:46579/ http://localhost:46580/
-python -m simpler_objects.async_replicate http://localhost:46580/ http://localhost:46579/
+python -m simpler_objects.async_replicate http://localhost:29171/ http://localhost:29172/
+python -m simpler_objects.async_replicate http://localhost:29172/ http://localhost:29171/
 ```
 
 ## Validation
@@ -58,6 +58,8 @@ python -m simpler_objects.async_replicate http://localhost:46580/ http://localho
 cd /path/to/bucket
 sha256sum -c ../bucket.sha256
 ```
+
+Note that ObjectIndex has a legacy way to manage this. Simply move your old files into above space and it should "just work."
 
 ## Performance test
 
@@ -75,4 +77,4 @@ sha256sum -c ../bucket.sha256
 
 ## ObjectIndex
 
-Optionally on ports 46569 (API) and 46567 (GUI)
+Optionally on ports 46569 (API) and 46567 (GUI).  Will be lowered/changed in future.
