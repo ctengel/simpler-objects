@@ -27,7 +27,7 @@ def get_object_server_health(url: str):
         return {'write': False, 'read': False, 'available': 0, 'percent': 0}
     return result.json()
 
-@app.get("/{bucket}/{key}")
+@app.api_route("/{bucket}/{key}", methods=["GET", "HEAD"])
 def find_object(bucket: str, key: str):
     """Return a redirect to an existing object"""
     object_path = f"{bucket}/{key}"

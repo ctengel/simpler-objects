@@ -62,17 +62,22 @@ def healthcheck():
          'percent': int(float(disk_stats.free)/float(disk_stats.total)*100.0)}
     return r
 
-@app.get("/{bucket}/{key}")
+@app.api_route("/{bucket}/{key}", methods=['GET', 'HEAD'])
 async def get_object(bucket: str, key: str):
     """Handle GET requests"""
     path = object_filename(bucket, key)
+    if not path.is_file():
+        raise HTTPException(status_code=404)
     my_cksum = None
-    with open(checksum_filename(path.parent), encoding='utf-8') as fp:
-        for line in fp:
-            checksum, file_name = line.strip().split()
-            if file_name == key:
-                my_cksum = bytes.fromhex(checksum)
-                break
+    try:
+        with open(checksum_filename(path.parent), encoding='utf-8') as fp:
+            for line in fp:
+                checksum, file_name = line.strip().split()
+                if file_name == key:
+                    my_cksum = bytes.fromhex(checksum)
+                    break
+    except FileNotFoundError:
+        pass
     headers = None
     if my_cksum:
         headers = {"Repr-Digest": http_digest_head(my_cksum)}
@@ -85,8 +90,8 @@ async def put_object(bucket: str, key: str, request: Request):
     # parse Content-Length
     try:
         length = int(request.headers["Content-Length"])
-    except TypeError as exc:
-        raise HTTPException(status_code=400) from exc
+    except (TypeError, KeyError):
+        length = None
 
     # ensure unique fikename
     path = object_filename(bucket, key)
@@ -101,7 +106,8 @@ async def put_object(bucket: str, key: str, request: Request):
         # TODO async? check length? lock?
         async for chunk in request.stream():
             dst.write(chunk)
-    assert path.stat().st_size == length
+    if length:
+        assert path.stat().st_size == length
 
     # Hash and compare
     file_digest = file_checksum(path)
@@ -129,10 +135,13 @@ def list_directory(bucket: str):
     r = {"bucket": bucket,
          "objects": {}}
     hashes = {}
-    with open(checksum_filename(dir_path), encoding='utf-8') as fp:
-        for line in fp:
-            checksum, file_name = line.strip().split()
-            hashes[file_name] = checksum
+    try:
+        with open(checksum_filename(dir_path), encoding='utf-8') as fp:
+            for line in fp:
+                checksum, file_name = line.strip().split()
+                hashes[file_name] = checksum
+    except FileNotFoundError:
+        pass
     for name in dir_path.iterdir():
         if name.is_dir():
             r['objects'][name.name] = {'directory': True,
