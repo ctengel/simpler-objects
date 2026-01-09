@@ -30,9 +30,12 @@ def parse_digest_header(value: str):
     """Get the SHA-256 checksum from a Content-Digest or Repr-Digest"""
     if not value:
         return None
-    return base64.b64decode([x.partition('=')[2]
+    shavalue = [x.partition('=')[2]
                             for x in value.split(',')
-                            if x.partition('=')[0] == 'sha-256'][0].strip(':'))
+                            if x.partition('=')[0] == 'sha-256']
+    if not shavalue:
+        return None
+    return base64.b64decode(shavalue[0].strip(':'))
 
 def parse_digest_headers(headers: dict):
     """Get one SHA-256 from multiple headers"""
