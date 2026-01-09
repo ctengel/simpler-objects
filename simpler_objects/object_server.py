@@ -129,7 +129,8 @@ async def put_object(bucket: str, key: str, request: Request):
                     headers={"Repr-Digest": http_digest_head(file_digest)})
 
 # TODO root bucket list
-@app.get("/{bucket}/")
+# TODO lightweight head
+@app.api_route("/{bucket}/", methods=['GET', 'HEAD'])
 def list_directory(bucket: str):
     """List objects in bucket"""
     dir_path = pathlib.Path(OBJECT_DIRECTORY).joinpath(bucket)

@@ -61,7 +61,7 @@ def add_object(bucket: str, key: str, content_length: Annotated[int | None, Head
             raise HTTPException(status_code=409)
     for server in candidates.keys():
         try:
-            result = requests.head(server + bucket, timeout=1)
+            result = requests.head(server + bucket + "/", timeout=1)
             result.raise_for_status()
         except requests.exceptions.RequestException:
             candidates.pop(server)
