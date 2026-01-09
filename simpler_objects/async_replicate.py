@@ -45,12 +45,13 @@ def replicate_bucket(source, dest):
     """Replicate any missing objects"""
     source_contents = get_bucket_contents(source)
     dest_contents = get_bucket_contents(dest)
+    # NOTE this "size" is a tuple that includes also a sha256
     for obj, size in source_contents.items():
         if obj in dest_contents:
             assert size == dest_contents[obj]
             continue
         # TODO check checksum also? (need to convert it)
-        assert replicate_object(source + obj, dest + obj) == size
+        assert replicate_object(source + obj, dest + obj) == size[0]
 
 def cli():
     """CLI"""
