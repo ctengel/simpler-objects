@@ -27,6 +27,11 @@ def get_object_server_health(url: str):
         return {'write': False, 'read': False, 'available': 0, 'percent': 0}
     return result.json()
 
+@app.get('/health')
+def healthcheck():
+    """Return basic info on cluster health"""
+    return {'servers': {x: get_object_server_health(x) for x in object_servers()}}
+
 @app.api_route("/{bucket}/{key}", methods=["GET", "HEAD"])
 def find_object(bucket: str, key: str):
     """Return a redirect to an existing object"""
@@ -69,3 +74,27 @@ def add_object(bucket: str, key: str, content_length: Annotated[int | None, Head
         raise HTTPException(507)
     server_to_upload = random.choices(list(candidates.keys()), list(candidates.values()))[0]
     return RedirectResponse(url=server_to_upload+object_path)
+
+@app.get("/{bucket}/")
+def list_bucket(bucket: str):
+    """List all items in a bucket"""
+    items = {}
+    for server in object_servers():
+        result = requests.get(server + bucket + '/', timeout=2)
+        if result.status_code == 404:
+            continue
+        if result.status_code != 200:
+            # TODO consider 502, 504
+            raise HTTPException(503)
+        for key, value in result.json()['objects']:
+            if key not in items:
+                items[key] = value
+                items[key]['locations'] = []
+                items[key]['error'] = False
+            else:
+                for subk in ['size', 'directory', 'checksun']:
+                    if items[key][subk] != value[subk]:
+                        items[key]['error'] = True
+                        items[key][subk] = None
+            items[key]['locations'].append(server)
+    return {'bucket': bucket, 'objects': items}

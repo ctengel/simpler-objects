@@ -1,9 +1,33 @@
 """Basic simple bucket async replication"""
 
 import argparse
+import warnings
+import random
 import requests
 
 TIMEOUT=2048
+
+def find_space(locator, bucket, object_size, current, desired):
+    """Find servers with space for replication"""
+    # TODO refactor with locator_api.add_object
+    res = requests.get(locator + 'health', timeout=4)
+    res.raise_for_status()
+    health = res.json()['servers']
+    candidates = {server: stats['available'] * stats['percent'] for server, stats in health.items()
+                  if stats['write'] and stats['percent'] > 1
+                  and stats['available'] > object_size + 1024*1024
+                  and server not in current}
+    for server in candidates.keys():
+        try:
+            result = requests.head(server + bucket + "/", timeout=1)
+            result.raise_for_status()
+        except requests.exceptions.RequestException:
+            candidates.pop(server)
+    if not candidates:
+        return []
+    # TODO emit warning?
+    desired = max(desired, len(candidates))
+    return random.choices(list(candidates.keys()), list(candidates.values()), k=desired)
 
 def get_object_size(obj, skip_404=False):
     """HEAD an object to determine its size"""
@@ -15,6 +39,7 @@ def get_object_size(obj, skip_404=False):
 
 def replicate_object(source, dest):
     """Replicate one object"""
+    # TODO multiple at once
     size, cksum = get_object_size(source)
     assert size
     assert cksum
@@ -52,6 +77,36 @@ def replicate_bucket(source, dest):
             continue
         # TODO check checksum also? (need to convert it)
         assert replicate_object(source + obj, dest + obj) == size[0]
+
+def auto_replica(locator, bucket, replicas):
+    """Just figure out where to put stuff and do it"""
+    res = requests.get(locator + bucket + '/', timeout=8)
+    res.raise_for_status()
+    contents = res.json()
+    error = False
+    for name, obj in contents['objects']:
+        if obj['error'] or not obj['checksum']:
+            warnings.warn(f'Object {name} has an issue.')
+            error = True
+            continue
+        desired = replicas - len(obj['locations'])
+        if desired < 1:
+            continue
+        spaces = find_space(locator, bucket, obj['size'], obj['locations'], desired)
+        if not spaces:
+            warnings.warn('No space to replicate object {name}')
+            error = True
+            continue
+        if len(spaces) < desired:
+            warnings.warn('Not enough spaces but will still do some...')
+            error = True
+        for run in spaces:
+            src = random.choice(obj['locations']) + bucket + '/' + name
+            dst = run +  bucket + '/' + name
+            print(f"{src} => {dst}")
+            assert replicate_object(src, dst ) == obj['size']
+    return error
+
 
 def cli():
     """CLI"""
