@@ -3,6 +3,7 @@
 import argparse
 import warnings
 import random
+import sys
 import requests
 
 TIMEOUT=2048
@@ -30,7 +31,7 @@ def find_space(locator, bucket, object_size, current, desired):
     return random.choices(list(candidates.keys()), list(candidates.values()), k=desired)
 
 def get_object_size(obj, skip_404=False):
-    """HEAD an object to determine its size"""
+    """HEAD an object to determine its size and checksum"""
     result = requests.head(obj, timeout=2)
     if skip_404 and result.status_code == 404:
         return 0, None
@@ -68,6 +69,7 @@ def get_bucket_contents(bucket):
 
 def replicate_bucket(source, dest):
     """Replicate any missing objects"""
+    # TODO do we still want a CLI way to invoke this?
     source_contents = get_bucket_contents(source)
     dest_contents = get_bucket_contents(dest)
     # NOTE this "size" is a tuple that includes also a sha256
@@ -104,17 +106,21 @@ def auto_replica(locator, bucket, replicas):
             src = random.choice(obj['locations']) + bucket + '/' + name
             dst = run +  bucket + '/' + name
             print(f"{src} => {dst}")
-            assert replicate_object(src, dst ) == obj['size']
-    return error
+            assert replicate_object(src, dst) == obj['size']
+    return not error
 
 
 def cli():
     """CLI"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("source")
-    parser.add_argument("dest")
+    #parser.add_argument("source")
+    #parser.add_argument("dest")
+    parser.add_argument("locator")
+    parser.add_argument("bucket")
+    parser.add_argument("replicas", type=int)
     args = parser.parse_args()
-    replicate_bucket(args.source, args.dest)
+    #replicate_bucket(args.source, args.dest)
+    sys.exit(int(not auto_replica(args.locator, args.bucket, args.replicas)))
 
 
 if __name__ == '__main__':
