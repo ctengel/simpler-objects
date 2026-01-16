@@ -86,7 +86,7 @@ def list_bucket(bucket: str):
         if result.status_code != 200:
             # TODO consider 502, 504
             raise HTTPException(503)
-        for key, value in result.json()['objects']:
+        for key, value in result.json()['objects'].items():
             if key not in items:
                 items[key] = value
                 items[key]['locations'] = []
