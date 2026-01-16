@@ -27,7 +27,7 @@ def find_space(locator, bucket, object_size, current, desired):
     if not candidates:
         return []
     # TODO emit warning?
-    desired = max(desired, len(candidates))
+    desired = min(desired, len(candidates))
     return random.choices(list(candidates.keys()), list(candidates.values()), k=desired)
 
 def get_object_size(obj, skip_404=False):
