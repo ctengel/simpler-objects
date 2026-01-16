@@ -92,7 +92,7 @@ def list_bucket(bucket: str):
                 items[key]['locations'] = []
                 items[key]['error'] = False
             else:
-                for subk in ['size', 'directory', 'checksun']:
+                for subk in ['size', 'directory', 'checksum']:
                     if items[key][subk] != value[subk]:
                         items[key]['error'] = True
                         items[key][subk] = None
