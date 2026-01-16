@@ -48,8 +48,7 @@ OBJECT_SERVERS="http://localhost:29171/,http://localhost:29172/" fastapi dev --p
 
 Run an asynchronous replication periodically:
 ```
-python -m simpler_objects.async_replicate http://localhost:29171/ http://localhost:29172/
-python -m simpler_objects.async_replicate http://localhost:29172/ http://localhost:29171/
+python -m simpler_objects.async_replicate http://localhost:29164/ bucket 2
 ```
 
 ## Validation
