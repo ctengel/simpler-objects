@@ -86,7 +86,7 @@ def auto_replica(locator, bucket, replicas):
     res.raise_for_status()
     contents = res.json()
     error = False
-    for name, obj in contents['objects']:
+    for name, obj in contents['objects'].items():
         if obj['error'] or not obj['checksum']:
             warnings.warn(f'Object {name} has an issue.')
             error = True
