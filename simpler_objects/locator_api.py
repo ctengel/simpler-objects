@@ -62,9 +62,10 @@ def add_object(bucket: str, key: str, content_length: Annotated[int | None, Head
             result = requests.head(server + object_path, timeout=1)
         except requests.exceptions.RequestException:
             candidates.pop(server, None)
+            continue
         if result.status_code != 404:
             raise HTTPException(status_code=409)
-    for server in candidates.keys():
+    for server in list(candidates.keys()):
         try:
             result = requests.head(server + bucket + "/", timeout=1)
             result.raise_for_status()
