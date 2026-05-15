@@ -1,0 +1,442 @@
+openapi: 3.0.3
+info:
+  title: Simpler Objects - Volume API
+  description: |
+    Standard HTTP/REST API for object storage volumes.
+    
+    Aligns with S3 ListObjects and WebDAV (RFC 4331) standards for disk quota.
+    Uses standard HTTP headers for object metadata (Content-Type, Content-Digest, Range).
+    
+    This spec documents both the current implementation and planned standardization.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:29171
+    description: Object Storage Server
+
+tags:
+  - name: Health
+    description: Server health and capacity status
+  - name: Objects
+    description: Get, put, and list objects
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Get server health and capacity
+      description: |
+        Returns the server's operational status and disk capacity information.
+        
+        **Current Implementation**: Uses `read`/`write` boolean flags.
+        **Proposed (Phase 3)**: Use `status` enum for clearer state semantics.
+      operationId: getHealth
+      responses:
+        '200':
+          description: Server health status
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HealthResponseCurrent'
+                  - $ref: '#/components/schemas/HealthResponseProposed'
+              examples:
+                current:
+                  summary: Current implementation
+                  value:
+                    read: true
+                    write: true
+                    available: 1099511627776
+                    percent: 50
+                proposed:
+                  summary: Proposed (Phase 3)
+                  value:
+                    status: readwrite
+                    quota-used-bytes: 1099511627776
+                    quota-available-bytes: 1099511627776
+                    total-bytes: 2199023255552
+
+  /{bucket}/{key}:
+    get:
+      tags:
+        - Objects
+      summary: Retrieve an object
+      description: |
+        Fetch an object from the bucket.
+        
+        Returns the object content with metadata headers:
+        - `Repr-Digest` (current) or `Content-Digest` (proposed): SHA-256 checksum
+        - `Content-Type` (proposed): MIME type
+        - `Content-Length`: Object size in bytes
+        
+        Supports Range requests (RFC 7233) for partial downloads - **Phase 2 implementation**.
+      operationId: getObject
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+          example: my-bucket
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+          example: path/to/object.bin
+        - name: Range
+          in: header
+          description: |
+            Byte range to retrieve (RFC 7233). 
+            Example: `bytes=0-1023` (first 1KB), `bytes=1024-` (from byte 1024 onward).
+            **Phase 2 implementation** - not yet supported.
+          schema:
+            type: string
+          example: "bytes=0-1023"
+      responses:
+        '200':
+          description: Object retrieved successfully
+          headers:
+            Repr-Digest:
+              description: |
+                SHA-256 checksum in RFC 8949 format (current implementation).
+                Format: `sha-256=:<base64>:`
+              schema:
+                type: string
+              example: "sha-256=:X48E9qOokqqrvdtdPK2MV2xJlzHG8UCQAe5NOW3p+sA=:"
+            Content-Digest:
+              description: |
+                SHA-256 checksum in RFC 9162 format (proposed Phase 1).
+                Will be supported alongside `Repr-Digest` for compatibility.
+              schema:
+                type: string
+              example: "sha-256=:X48E9qOokqqrvdtdPK2MV2xJlzHG8UCQAe5NOW3p+sA=:"
+            Content-Type:
+              description: "MIME type of the object (proposed Phase 1). Example: application/octet-stream, image/png, text/plain"
+              schema:
+                type: string
+              example: "application/octet-stream"
+            Content-Length:
+              description: Size of the object in bytes
+              schema:
+                type: integer
+              example: 1048576
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: |
+            Partial content (Phase 2 implementation).
+            Returned when Range header is provided and valid.
+          headers:
+            Content-Range:
+              description: Byte range returned (RFC 7233)
+              schema:
+                type: string
+              example: "bytes 0-1023/1048576"
+            Repr-Digest:
+              description: SHA-256 of the full object (not just the range)
+              schema:
+                type: string
+        '404':
+          description: Object not found
+        '416':
+          description: |
+            Range Not Satisfiable (Phase 2 implementation).
+            Returned when requested byte range exceeds object size.
+    
+    head:
+      tags:
+        - Objects
+      summary: Get object metadata (lightweight)
+      description: |
+        Get object metadata without downloading content.
+        Returns the same headers as GET but no body.
+      operationId: headObject
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Object exists
+          headers:
+            Repr-Digest:
+              schema:
+                type: string
+            Content-Type:
+              schema:
+                type: string
+            Content-Length:
+              schema:
+                type: integer
+        '404':
+          description: Object not found
+    
+    put:
+      tags:
+        - Objects
+      summary: Upload or create an object
+      description: |
+        Upload an object to the bucket. Object must not already exist (use 409 Conflict if it does).
+        
+        **Digest verification** (RFC 9162):
+        - Client can provide `Content-Digest` header with expected SHA-256
+        - Server verifies uploaded content matches; if not, deletes file and returns 400
+        - Server always responds with `Repr-Digest` (current) or `Content-Digest` (proposed)
+        
+        **Locking** (Issue #18):
+        When a PUT is in progress, the locator API should see `status: notready` from health check.
+        Prevents concurrent writes to the same object.
+      operationId: putObject
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+          example: my-bucket
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+          example: path/to/object.bin
+        - name: Content-Length
+          in: header
+          required: true
+          description: Size of the object being uploaded
+          schema:
+            type: integer
+          example: 1048576
+        - name: Content-Type
+          in: header
+          description: MIME type of the object (proposed Phase 1)
+          schema:
+            type: string
+          example: "application/octet-stream"
+        - name: Content-Digest
+          in: header
+          description: |
+            Expected SHA-256 checksum (RFC 9162 format) for integrity verification.
+            Format: `sha-256=:<base64>:`
+            Optional. Server will verify and reject with 400 if mismatch.
+          schema:
+            type: string
+          example: "sha-256=:X48E9qOokqqrvdtdPK2MV2xJlzHG8UCQAe5NOW3p+sA=:"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: Object created successfully
+          headers:
+            Repr-Digest:
+              description: SHA-256 checksum of uploaded object (RFC 8949 format)
+              schema:
+                type: string
+            Content-Digest:
+              description: SHA-256 checksum of uploaded object (RFC 9162 format, proposed Phase 1)
+              schema:
+                type: string
+        '400':
+          description: |
+            Bad Request.
+            - Digest mismatch (uploaded content doesn't match Content-Digest header)
+            - Invalid Content-Length
+        '409':
+          description: Object already exists. Cannot overwrite.
+        '507':
+          description: |
+            Insufficient Storage.
+            Returned when server doesn't have enough free space for the object.
+
+  /{bucket}/:
+    get:
+      tags:
+        - Objects
+      summary: List objects in a bucket
+      description: |
+        List all objects (and subdirectories) in a bucket.
+        
+        Aligns with S3 ListObjects with WebDAV extensions:
+        - `size`: Object size in bytes
+        - `checksum`: SHA-256 hex digest (optional, loaded from .sha256 file)
+        - `directory`: Boolean flag (true for subdirectories)
+        - `locations` (locator API only): Which servers have this object
+        
+        **Proposed improvements** (Phase 4):
+        - Add `last-modified` timestamp
+        - Support pagination with `marker` / `prefix` parameters
+        - Return MIME type per object
+      operationId: listBucket
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+          example: my-bucket
+      responses:
+        '200':
+          description: Bucket contents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BucketListing'
+              example:
+                bucket: my-bucket
+                objects:
+                  file1.bin:
+                    directory: false
+                    size: 1048576
+                    checksum: "5d41402abc4b2a76b9719d911017c592"
+                  subdir:
+                    directory: true
+                    size: 0
+                    checksum: null
+        '404':
+          description: Bucket not found
+    
+    head:
+      tags:
+        - Objects
+      summary: Check if bucket exists (lightweight)
+      description: Get bucket metadata without listing contents.
+      operationId: headBucket
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Bucket exists
+        '404':
+          description: Bucket not found
+
+components:
+  schemas:
+    HealthResponseCurrent:
+      type: object
+      description: Current health endpoint response format
+      properties:
+        read:
+          type: boolean
+          description: Server can handle GET requests
+        write:
+          type: boolean
+          description: Server can handle PUT requests
+        available:
+          type: integer
+          description: Free disk space in bytes
+        percent:
+          type: integer
+          description: Percentage of disk that is free (0-100)
+      required:
+        - read
+        - write
+        - available
+        - percent
+      example:
+        read: true
+        write: true
+        available: 1099511627776
+        percent: 50
+
+    HealthResponseProposed:
+      type: object
+      description: |
+        Proposed health endpoint response (Phase 3).
+        Uses WebDAV-compatible field names (RFC 4331) and clearer status semantics.
+      properties:
+        status:
+          type: string
+          enum:
+            - readwrite
+            - readonly
+            - notready
+          description: |
+            Server operational status:
+            - `readwrite`: Can handle GET and PUT requests
+            - `readonly`: Can handle GET; PUT rejected (disk full or read-only mode)
+            - `notready`: Cannot handle requests; coming online or processing old requests
+        quota-used-bytes:
+          type: integer
+          description: Used disk space in bytes (WebDAV compatible)
+        quota-available-bytes:
+          type: integer
+          description: Free disk space in bytes (WebDAV compatible)
+        total-bytes:
+          type: integer
+          description: Total disk space in bytes
+      required:
+        - status
+        - quota-used-bytes
+        - quota-available-bytes
+      example:
+        status: readwrite
+        quota-used-bytes: 1099511627776
+        quota-available-bytes: 1099511627776
+        total-bytes: 2199023255552
+
+    BucketListing:
+      type: object
+      description: List of objects in a bucket
+      properties:
+        bucket:
+          type: string
+          description: Bucket name
+        objects:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ObjectMetadata'
+      required:
+        - bucket
+        - objects
+
+    ObjectMetadata:
+      type: object
+      description: Object metadata in bucket listing
+      properties:
+        directory:
+          type: boolean
+          description: True if this is a subdirectory, false if a file
+        size:
+          type: integer
+          description: Size in bytes (0 for directories)
+        checksum:
+          type: string
+          nullable: true
+          description: SHA-256 hex digest (null if not available)
+        locations:
+          type: array
+          items:
+            type: string
+          description: |
+            URLs of servers holding this object (locator API only).
+            Example: ["http://localhost:29171/", "http://localhost:29172/"]
+        error:
+          type: boolean
+          description: |
+            True if metadata mismatch across replicas (locator API only).
+            Indicates size, checksum, or directory flag differs between servers.
+      required:
+        - directory
+        - size
+        - checksum
