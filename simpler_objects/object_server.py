@@ -5,6 +5,7 @@ import shutil
 import base64
 import hashlib
 import os
+import mimetypes
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
@@ -23,7 +24,7 @@ def object_filename(bucket, key):
     return pathlib.Path(OBJECT_DIRECTORY).joinpath(bucket).joinpath(key)
 
 def http_digest_head(file_digest: bytes) -> str:
-    """Write an http digest header"""
+    """Write an http digest header in RFC 9162 format"""
     return f"sha-256=:{base64.b64encode(file_digest).decode()}:"
 
 def parse_digest_header(value: str):
@@ -55,6 +56,11 @@ def file_checksum(path):
             hash_sha256.update(chunk)
     return hash_sha256.digest()
 
+def get_content_type(key: str) -> str:
+    """Determine MIME type from object key/filename"""
+    mime_type, _ = mimetypes.guess_type(key)
+    return mime_type or 'application/octet-stream'
+
 @app.get('/health')
 def healthcheck():
     """Return basic info on node health"""
@@ -67,7 +73,14 @@ def healthcheck():
 
 @app.api_route("/{bucket}/{key}", methods=['GET', 'HEAD'])
 async def get_object(bucket: str, key: str):
-    """Handle GET requests"""
+    """Handle GET requests
+    
+    Returns object with standard headers:
+    - Content-Type: MIME type detected from filename
+    - Content-Digest: SHA-256 checksum (RFC 9162)
+    - Repr-Digest: SHA-256 checksum (RFC 8949, for backward compatibility)
+    - Content-Length: Object size
+    """
     path = object_filename(bucket, key)
     if not path.is_file():
         raise HTTPException(status_code=404)
@@ -81,14 +94,27 @@ async def get_object(bucket: str, key: str):
                     break
     except FileNotFoundError:
         pass
-    headers = None
+    
+    # Build response headers with standard fields
+    headers = {}
     if my_cksum:
-        headers = {"Repr-Digest": http_digest_head(my_cksum)}
+        digest_header = http_digest_head(my_cksum)
+        headers["Repr-Digest"] = digest_header
+        headers["Content-Digest"] = digest_header
+    
+    headers["Content-Type"] = get_content_type(key)
+    
     return FileResponse(path, headers=headers)
 
 @app.put("/{bucket}/{key}")
 async def put_object(bucket: str, key: str, request: Request):
-    """Handle PUT requests"""
+    """Handle PUT requests
+    
+    Stores object and verifies digest if provided.
+    Returns object with standard headers:
+    - Content-Digest: SHA-256 checksum (RFC 9162)
+    - Repr-Digest: SHA-256 checksum (RFC 8949, for backward compatibility)
+    """
 
     # parse Content-Length
     try:
@@ -124,9 +150,13 @@ async def put_object(bucket: str, key: str, request: Request):
     with open(hash_file, 'a', encoding='utf-8') as hf:
         hf.write(cksum_line)
 
-    # send response
-    return Response(status_code=201, content=None,
-                    headers={"Repr-Digest": http_digest_head(file_digest)})
+    # send response with standard headers
+    digest_header = http_digest_head(file_digest)
+    response_headers = {
+        "Repr-Digest": digest_header,
+        "Content-Digest": digest_header
+    }
+    return Response(status_code=201, content=None, headers=response_headers)
 
 # TODO root bucket list
 # TODO lightweight head
