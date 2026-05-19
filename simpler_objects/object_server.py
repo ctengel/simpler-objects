@@ -17,10 +17,17 @@ def checksum_filename(bucket: pathlib.Path):
     """Determine a bucket checksum file"""
     return bucket.parent.joinpath(bucket.name).with_suffix('.sha256')
 
+def safe_path(base: pathlib.Path, *parts) -> pathlib.Path:
+    """Resolve path and reject traversal outside base."""
+    resolved_base = base.resolve()
+    candidate = base.joinpath(*parts).resolve()
+    if not candidate.is_relative_to(resolved_base):
+        raise HTTPException(status_code=400)
+    return candidate
+
 def object_filename(bucket, key):
     """Get the Path of an object"""
-    # TODO make this safer
-    return pathlib.Path(OBJECT_DIRECTORY).joinpath(bucket).joinpath(key)
+    return safe_path(pathlib.Path(OBJECT_DIRECTORY), bucket, key)
 
 def http_digest_head(file_digest: bytes) -> str:
     """Write an http digest header"""
@@ -133,7 +140,7 @@ async def put_object(bucket: str, key: str, request: Request):
 @app.api_route("/{bucket}/", methods=['GET', 'HEAD'])
 def list_directory(bucket: str):
     """List objects in bucket"""
-    dir_path = pathlib.Path(OBJECT_DIRECTORY).joinpath(bucket)
+    dir_path = safe_path(pathlib.Path(OBJECT_DIRECTORY), bucket)
     if not dir_path.is_dir():
         raise HTTPException(status_code=404)
     r = {"bucket": bucket,
