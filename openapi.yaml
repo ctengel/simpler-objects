@@ -33,6 +33,12 @@ paths:
         schema:
           type: string
           title: Key
+      - name: Range
+        in: header
+        required: false
+        schema:
+          type: string
+        description: 'Byte range to retrieve (RFC 7233), e.g. bytes=0-1023'
       responses:
         '200':
           description: Object data
@@ -47,8 +53,27 @@ paths:
               schema:
                 type: string
                 format: binary
+        '206':
+          description: Partial content
+          headers:
+            Content-Range:
+              schema:
+                type: string
+              description: 'Byte range returned (RFC 7233), e.g. bytes 0-1023/1048576'
+            Repr-Digest:
+              required: false
+              schema:
+                type: string
+              description: 'SHA-256 digest of the full object'
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
         '404':
           description: Object not found
+        '416':
+          description: Range not satisfiable
         '422':
           description: Validation Error
           content:
@@ -56,9 +81,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     head:
-      summary: Get Object
-      description: Retrieve an existing object
-      operationId: getObject
+      summary: Get Object Metadata
+      description: Retrieve metadata for an existing object without downloading it
+      operationId: headObject
       parameters:
       - name: bucket
         in: path
@@ -74,26 +99,17 @@ paths:
           title: Key
       responses:
         '200':
-          description: Object data
+          description: Object exists
           headers:
             Repr-Digest:
               required: false
               schema:
                 type: string
               description: 'SHA-256 digest in sf-binary format, e.g. sha-256=:base64:'
-          content:
-            '*/*':
-              schema:
-                type: string
-                format: binary
         '404':
           description: Object not found
         '422':
           description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
     put:
       summary: Put Object
       description: Store an object
@@ -113,12 +129,17 @@ paths:
           title: Key
       - name: content-length
         in: header
-        required: false
+        required: true
         schema:
-          anyOf:
-          - type: integer
-          - type: 'null'
+          type: integer
           title: Content-Length
+      requestBody:
+        required: true
+        content:
+          '*/*':
+            schema:
+              type: string
+              format: binary
       responses:
         '201':
           description: Object stored
@@ -127,6 +148,8 @@ paths:
               required: false
               schema:
                 type: string
+        '400':
+          description: Digest mismatch (uploaded content does not match Content-Digest header)
         '409':
           description: Object already exists
         '507':
@@ -165,9 +188,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
     head:
-      summary: List Bucket
-      description: List all items in a bucket
-      operationId: listBucket
+      summary: Check Bucket Exists
+      description: Check if a bucket exists without listing its contents
+      operationId: headBucket
       parameters:
       - name: bucket
         in: path
@@ -177,19 +200,11 @@ paths:
           title: Bucket
       responses:
         '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ListBucketResponse'
+          description: Bucket exists
         '404':
           description: Bucket not found
         '422':
           description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     HTTPValidationError:
