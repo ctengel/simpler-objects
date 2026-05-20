@@ -1,0 +1,299 @@
+openapi: 3.1.0
+info:
+  title: Simpler Objects API
+  version: 0.1.0
+paths:
+  /health:
+    get:
+      summary: Healthcheck
+      description: Return basic info on cluster health
+      operationId: healthcheck
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /{bucket}/{key}:
+    get:
+      summary: Get Object
+      description: Retrieve an existing object
+      operationId: getObject
+      parameters:
+      - name: bucket
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bucket
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Key
+      responses:
+        '200':
+          description: Object data
+          headers:
+            Repr-Digest:
+              required: false
+              schema:
+                type: string
+              description: 'SHA-256 digest in sf-binary format, e.g. sha-256=:base64:'
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Object not found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    head:
+      summary: Get Object
+      description: Retrieve an existing object
+      operationId: getObject
+      parameters:
+      - name: bucket
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bucket
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Key
+      responses:
+        '200':
+          description: Object data
+          headers:
+            Repr-Digest:
+              required: false
+              schema:
+                type: string
+              description: 'SHA-256 digest in sf-binary format, e.g. sha-256=:base64:'
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Object not found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      summary: Put Object
+      description: Store an object
+      operationId: putObject
+      parameters:
+      - name: bucket
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bucket
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Key
+      - name: content-length
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Content-Length
+      responses:
+        '201':
+          description: Object stored
+          headers:
+            Repr-Digest:
+              required: false
+              schema:
+                type: string
+        '409':
+          description: Object already exists
+        '507':
+          description: Insufficient storage
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /{bucket}/:
+    get:
+      summary: List Bucket
+      description: List all items in a bucket
+      operationId: listBucket
+      parameters:
+      - name: bucket
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bucket
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBucketResponse'
+        '404':
+          description: Bucket not found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    head:
+      summary: List Bucket
+      description: List all items in a bucket
+      operationId: listBucket
+      parameters:
+      - name: bucket
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bucket
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBucketResponse'
+        '404':
+          description: Bucket not found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    HealthResponse:
+      type: object
+      properties:
+        read:
+          type: boolean
+        write:
+          type: boolean
+        available:
+          type: integer
+          description: Free disk space in bytes
+        percent:
+          type: integer
+          description: Percentage of free disk space (0-100)
+        servers:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/NodeHealth'
+          description: Per-server health (locator-api only)
+      title: HealthResponse
+    NodeHealth:
+      type: object
+      required:
+      - read
+      - write
+      - available
+      - percent
+      properties:
+        read:
+          type: boolean
+        write:
+          type: boolean
+        available:
+          type: integer
+        percent:
+          type: integer
+      title: NodeHealth
+    ListBucketResponse:
+      type: object
+      required:
+      - bucket
+      - objects
+      properties:
+        bucket:
+          type: string
+        objects:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ObjectInfo'
+      title: ListBucketResponse
+    ObjectInfo:
+      type: object
+      required:
+      - directory
+      properties:
+        directory:
+          type: boolean
+        size:
+          type:
+          - integer
+          - 'null'
+        checksum:
+          type:
+          - string
+          - 'null'
+          description: SHA-256 hex digest, null if unknown or conflicted
+        locations:
+          type: array
+          items:
+            type: string
+          description: Server URLs where object is stored (locator-api only)
+        error:
+          type: boolean
+          description: True if replicas have conflicting checksums (locator-api only)
+      title: ObjectInfo
+
