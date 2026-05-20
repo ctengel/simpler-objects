@@ -5,7 +5,8 @@ import shutil
 import base64
 import hashlib
 import os
-from fastapi import FastAPI, HTTPException, Request
+from typing import Annotated
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import FileResponse, Response
 
 app = FastAPI()
@@ -94,14 +95,8 @@ async def get_object(bucket: str, key: str):
     return FileResponse(path, headers=headers)
 
 @app.put("/{bucket}/{key}")
-async def put_object(bucket: str, key: str, request: Request):
-    """Handle PUT requests"""
-
-    # parse Content-Length
-    try:
-        length = int(request.headers["Content-Length"])
-    except (TypeError, KeyError):
-        length = None
+async def put_object(bucket: str, key: str, request: Request,
+                     content_length: Annotated[int | None, Header()] = None):
 
     # ensure unique fikename
     path = object_filename(bucket, key)
@@ -116,8 +111,8 @@ async def put_object(bucket: str, key: str, request: Request):
         # TODO async? check length? lock?
         async for chunk in request.stream():
             dst.write(chunk)
-    if length:
-        assert path.stat().st_size == length
+    if content_length is not None:
+        assert path.stat().st_size == content_length
 
     # Hash and compare
     file_digest = file_checksum(path)
@@ -156,7 +151,7 @@ def list_directory(bucket: str):
     for name in dir_path.iterdir():
         if name.is_dir():
             r['objects'][name.name] = {'directory': True,
-                                        'size': 0,
+                                        'size': None,
                                         'checksum': None}
         else:
             r['objects'][name.name] = {'directory': False,

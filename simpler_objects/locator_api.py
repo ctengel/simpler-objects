@@ -5,7 +5,7 @@ import random
 from typing import Annotated
 import requests
 from fastapi import FastAPI, HTTPException, Header
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 
 app = FastAPI()
 
@@ -48,9 +48,8 @@ def find_object(bucket: str, key: str):
 @app.put("/{bucket}/{key}")
 def add_object(bucket: str, key: str, content_length: Annotated[int | None, Header()] = None):
     """Return a redirect to a server that can handle an object request"""
-    assert content_length
     object_path = f"{bucket}/{key}"
-    object_size = content_length
+    object_size = content_length if content_length is not None else 1024 * 1024 * 1024
     # TODO use caches of objects and servers but then double check vs checking everybody
     all_obj_servers = object_servers()
     health = {server: get_object_server_health(server) for server in all_obj_servers}
@@ -75,6 +74,23 @@ def add_object(bucket: str, key: str, content_length: Annotated[int | None, Head
         raise HTTPException(507)
     server_to_upload = random.choices(list(candidates.keys()), list(candidates.values()))[0]
     return RedirectResponse(url=server_to_upload+object_path)
+
+@app.head("/{bucket}/")
+def head_bucket(bucket: str):
+    """Check if a bucket exists on any server"""
+    error = False
+    for server in object_servers():
+        try:
+            result = requests.head(server + bucket + "/", timeout=2)
+            if result.status_code == 200:
+                return Response(status_code=200)
+            elif result.status_code != 404:
+                error = True
+        except requests.exceptions.RequestException:
+            error = True
+    if error:
+        raise HTTPException(status_code=503)
+    raise HTTPException(status_code=404)
 
 @app.get("/{bucket}/")
 def list_bucket(bucket: str):

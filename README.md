@@ -74,6 +74,25 @@ Note that ObjectIndex has a legacy way to manage this. Simply move your old file
 - run in screen
 - change `fastapi dev` to `fastapi run` for prod
 
+## Client guidance
+
+### Redirects (307)
+
+The locator returns `307 Temporary Redirect` for `GET`, `HEAD`, and `PUT` on `/{bucket}/{key}`. Clients must follow redirects and must preserve the original HTTP method — particularly for PUT. Use `curl -L`; verify your HTTP library honours 307 method preservation for non-GET requests.
+
+### `Content-Length` on PUT
+
+`Content-Length` is optional but highly recommended and may become mandatory again in a future version. Sending it allows the locator to select a server with sufficient free space (if omitted, 1 GiB is assumed) and allows the object server to verify the upload was received intact.
+
+### Digest headers on PUT
+
+Clients may send `Content-Digest` or `Repr-Digest` with a SHA-256 value (`sha-256=:base64:` format) for integrity verification. The object server returns `400` on mismatch. The `Repr-Digest` header on GET/HEAD responses is present only when a checksum record exists for the object — do not assume it is always included.
+
+### Changes in spec v0.2.0
+
+- **`HEAD /{bucket}/` on the locator** is now supported (previously returned `405`). Returns `200` if the bucket exists on any server, `404` if none have it, `503` for server errors.
+- **Directory entries in `GET /{bucket}/`** now return `"size": null` instead of `"size": 0`. Use the `"directory": true` field to identify directories rather than testing `size == 0`.
+
 ## ObjectIndex
 
 Optionally on ports 46569 (API) and 46567 (GUI).  Will be lowered/changed in future.

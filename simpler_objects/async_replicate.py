@@ -36,7 +36,7 @@ def get_object_size(obj, skip_404=False):
     if skip_404 and result.status_code == 404:
         return 0, None
     result.raise_for_status()
-    return int(result.headers['Content-Length']), result.headers['Repr-Digest']
+    return int(result.headers['Content-Length']), result.headers.get('Repr-Digest')
 
 def replicate_object(source, dest):
     """Replicate one object"""
@@ -53,7 +53,7 @@ def replicate_object(source, dest):
         put = requests.put(dest, data=get.raw, timeout=TIMEOUT,
                            headers={#'Content-Length': str(size),
                                     'Content-Digest': cksum})#,
-#                                    'Transfer-Encoding': 'identity'})
+#                                    'Transfer-Encoding': 'identity')
         put.raise_for_status()
     assert get_object_size(dest) == (size, cksum)
     # TODO return checksum also?

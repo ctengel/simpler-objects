@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Simpler Objects API
-  version: 0.1.0
+  version: 0.2.0
 paths:
   /health:
     get:
@@ -70,6 +70,8 @@ paths:
               schema:
                 type: string
                 format: binary
+        '307':
+          description: Temporary redirect to the server hosting this object (locator-api only)
         '404':
           description: Object not found
         '416':
@@ -106,6 +108,8 @@ paths:
               schema:
                 type: string
               description: 'SHA-256 digest in sf-binary format, e.g. sha-256=:base64:'
+        '307':
+          description: Temporary redirect to the server hosting this object (locator-api only)
         '404':
           description: Object not found
         '422':
@@ -129,7 +133,7 @@ paths:
           title: Key
       - name: content-length
         in: header
-        required: true
+        required: false
         schema:
           type: integer
           title: Content-Length
@@ -148,6 +152,8 @@ paths:
               required: false
               schema:
                 type: string
+        '307':
+          description: Temporary redirect to the server where the object should be uploaded (locator-api only)
         '400':
           description: Digest mismatch (uploaded content does not match Content-Digest header)
         '409':
