@@ -146,7 +146,10 @@ async def list_bucket(bucket: str):
     """List all items in a bucket"""
     async with httpx.AsyncClient() as client:
         async def fetch_server(server):
-            result = await client.get(server + bucket + '/', timeout=2)
+            try:
+                result = await client.get(server + bucket + '/', timeout=2)
+            except httpx.HTTPError:
+                return server, None
             return server, result
 
         # All servers queried in parallel; gather preserves order so the merge
@@ -155,11 +158,12 @@ async def list_bucket(bucket: str):
 
     items = {}
     for server, result in results:
+        if result is None or result.status_code not in (200, 404):
+            # 503, not 502/504: the locator coordinates object servers but is
+            # not itself a gateway/proxy, so gateway-specific codes don't apply.
+            raise HTTPException(503)
         if result.status_code == 404:
             continue
-        if result.status_code != 200:
-            # TODO consider 502, 504
-            raise HTTPException(503)
         for key, value in result.json()['objects'].items():
             if key not in items:
                 items[key] = value

@@ -255,6 +255,16 @@ def test_list_bucket_server_error(client):
 
 
 @respx.mock
+def test_list_bucket_server_down(client):
+    """An unreachable object server yields 503, not an uncaught-exception 500."""
+    obj_a = {"objects": {"obj1": {"size": 5, "directory": False, "checksum": "sha256:abc"}}}
+    respx.get(SERVER_A + BUCKET + "/").mock(return_value=httpx.Response(200, json=obj_a))
+    respx.get(SERVER_B + BUCKET + "/").mock(side_effect=httpx.ConnectError("down"))
+    resp = client.get(f"/{BUCKET}/")
+    assert resp.status_code == 503
+
+
+@respx.mock
 def test_list_bucket_missing_on_one_server(client):
     """A 404 from one server is not an error — bucket just isn't there."""
     obj_a = {"objects": {"obj1": {"size": 5, "directory": False, "checksum": "sha256:abc"}}}
