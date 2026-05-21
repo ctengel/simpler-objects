@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Simpler Objects API
-  version: 0.3.1
+  version: 0.4.0
   description: >
     Example hash values throughout this spec represent SHA-256("hello"):
     hex `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`,
@@ -250,12 +250,18 @@ paths:
         may probe the MIME type from the file extension.
 
 
+        `Content-Length` is required. The locator uses it to select a server with sufficient
+        free space; the object server uses it to validate the upload. Requests without
+        `Content-Length` are rejected with `411 Length Required`.
+
+
         Clients PUTting through the locator should send the `Expect: 100-continue` header.
         The locator answers PUT with a `307` redirect and never reads the request body; with
         the handshake it returns the `307` in place of `100 Continue`, so the body is sent
         only to the object server. Without it the body is uploaded twice — once to the
         locator (which discards it) and once to the object server. `requests` and `httpx`
-        do not perform the handshake; `aiohttp` does, via `expect100=True`.
+        do not perform the `Expect: 100-continue` handshake even when the header is set
+        explicitly — use `aiohttp` with `expect100=True` for clean single-upload behaviour.
       operationId: putObject
       parameters:
       - name: bucket
@@ -274,7 +280,7 @@ paths:
         example: document.pdf
       - name: content-length
         in: header
-        required: false
+        required: true
         schema:
           type: integer
           title: Content-Length
@@ -332,6 +338,17 @@ paths:
                 title: Conflict
                 status: 409
                 detail: "Object 'document.pdf' already exists in bucket 'my-bucket'"
+        '411':
+          description: Length Required — Content-Length header is missing
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+              example:
+                type: about:blank
+                title: Length Required
+                status: 411
+                detail: Content-Length header is required for PUT requests
         '507':
           description: Insufficient storage
           content:

@@ -84,11 +84,13 @@ The locator returns `307 Temporary Redirect` for `GET`, `HEAD`, and `PUT` on `/{
 
 A `PUT` to the locator is answered with a `307` redirect, and the locator never reads the request body. Without coordination a client uploads the entire object to the locator and then again to the object server, transferring the data twice. Sending `Expect: 100-continue` avoids this: the locator returns the `307` in place of `100 Continue`, so a compliant client discards the upload and sends the body only to the object server (which does emit `100 Continue`).
 
-Not all clients send `Expect: 100-continue`. `curl` adds it automatically only for request bodies of 1 MiB or larger; for smaller bodies — and for clients such as Python `requests` and `httpx`, which have no `Expect: 100-continue` support — the client streams the whole object to the locator, receives the `307`, then re-uploads it to the object server, transferring the data twice (confirmed here with 8 MiB `requests` and `httpx` uploads). Send `Expect: 100-continue` explicitly on every PUT to avoid this; Python uploaders should use `aiohttp` (see below). Even then the client's expect-continue timeout applies: if the locator is slow to select a server (for example when an object server is down) the client may begin uploading before the `307` arrives.
+Not all clients send `Expect: 100-continue`. `curl` adds it automatically only for request bodies of 1 MiB or larger; for smaller bodies — and for clients such as Python `requests` and `httpx`, which have no `Expect: 100-continue` support — the client streams the whole object to the locator, receives the `307`, then re-uploads it to the object server, transferring the data twice (confirmed here with 8 MiB `requests` and `httpx` uploads). Send `Expect: 100-continue` explicitly on every PUT to avoid this; Python uploaders should use `aiohttp` or `pycurl` (see below). Even then the client's expect-continue timeout applies: if the locator is slow to select a server (for example when an object server is down) the client may begin uploading before the `307` arrives.
 
-### Python clients: `aiohttp` instead of `requests`
+### Python clients: `aiohttp` or `pycurl` instead of `requests`
 
-Python's `requests` and `httpx` have no `Expect: 100-continue` handshake, so an upload helper built on either always transfers the body twice. `aiohttp` supports it via `expect100=True`, and drops into an existing synchronous helper without changing its signature — wrap the async call in `asyncio.run()`:
+Python's `requests` and `httpx` have no `Expect: 100-continue` handshake, so an upload helper built on either always transfers the body twice. Two good alternatives are verified to work:
+
+**`aiohttp`** (`expect100=True`) — pure Python, async-native, wraps cleanly in a synchronous helper:
 
 ```python
 import asyncio
@@ -112,16 +114,40 @@ def simple_upload(filename, url, file_mime, checksum_val=None):
     asyncio.run(_put())
 ```
 
-The function stays synchronous, so callers are unchanged. `expect100=True` makes aiohttp wait for `100 Continue` before sending the body; the locator replies `307` instead, so the body skips the locator entirely. aiohttp follows the `307` automatically, exactly as `requests` does. Verified with an 8 MiB upload: only request headers (~240 bytes) reach the locator.
+`expect100=True` makes aiohttp wait for `100 Continue` before sending the body; the locator replies `307` instead, so the body skips the locator entirely. Verified: only ~240 bytes (headers) reach the locator.
 
 - Do not call `asyncio.run()` from code already inside an event loop — there, make the helper `async def` and `await` the upload directly.
 - Uploading many files? Create one `ClientSession` and reuse it instead of one per call.
+
+**`pycurl`** — synchronous, no asyncio required; libcurl handles the handshake natively:
+
+```python
+import os
+import pycurl
+
+def simple_upload(filename, url):
+    """PUT a file to a locator URL; body uploaded once via Expect: 100-continue."""
+    c = pycurl.Curl()
+    c.setopt(pycurl.URL, url)
+    c.setopt(pycurl.UPLOAD, 1)
+    c.setopt(pycurl.FOLLOWLOCATION, 1)
+    c.setopt(pycurl.HTTPHEADER, ['Expect: 100-continue'])
+    with open(filename, 'rb') as f:
+        c.setopt(pycurl.READDATA, f)
+        c.setopt(pycurl.INFILESIZE, os.path.getsize(filename))
+        c.perform()
+    c.close()
+```
+
+libcurl automatically adds `Expect: 100-continue` for bodies ≥ 1 MiB, but setting it explicitly (as above) is recommended so small files are also handled correctly. Requires libcurl to be installed (`pip install pycurl`). Verified: only ~290 bytes (headers) reach the locator.
+
+Choose `aiohttp` if you are already in an async codebase or want a pure-Python dependency. Choose `pycurl` if you prefer synchronous code or want to avoid asyncio entirely.
 
 Runnable demos that measure this behavior, and the investigation notes behind this guidance, are in [`upload-behavior-demo/`](upload-behavior-demo/).
 
 ### `Content-Length` on PUT
 
-`Content-Length` is optional but highly recommended and may become mandatory again in a future version. Sending it allows the locator to select a server with sufficient free space (if omitted, 1 GiB is assumed) and allows the object server to verify the upload was received intact.
+`Content-Length` is required on PUT. The locator uses it to select a server with sufficient free space; without it the request is rejected with `411 Length Required`. The object server uses it to verify the upload was received intact. Always send `Content-Length` — use `aiohttp` with `expect100=True` (see above) to ensure it is sent correctly when uploading through the locator.
 
 ### Digest headers on PUT
 
@@ -131,6 +157,10 @@ Clients may send `Content-Digest` or `Repr-Digest` with a SHA-256 value (`sha-25
 
 - **`HEAD /{bucket}/` on the locator** is now supported (previously returned `405`). Returns `200` if the bucket exists on any server, `404` if none have it, `503` for server errors.
 - **Directory entries in `GET /{bucket}/`** now return `"size": null` instead of `"size": 0`. Use the `"directory": true` field to identify directories rather than testing `size == 0`.
+
+### Changes in spec v0.4.0
+
+- **`Content-Length` is now required on `PUT /{bucket}/{key}`** (locator only). Previously the locator assumed 1 GiB when `Content-Length` was absent; it now returns `411 Length Required`. The object server already required it.
 
 ### Changes in spec v0.3.0
 

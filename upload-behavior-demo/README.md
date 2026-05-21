@@ -45,13 +45,23 @@ locator.
 | `curl`, body ≥ 1 MiB | headers only | 1x (curl auto-sends `Expect`) |
 | `aiohttp` (default) | ~1.8 MiB (timing-dependent) | partial — aborts mid-stream |
 | `aiohttp`, `expect100=True` | ~240 bytes (headers only) | **1x** |
+| `pycurl` (default, body ≥ 1 MiB) | ~290 bytes (headers only) | **1x** (libcurl auto-sends `Expect`) |
+| `pycurl`, explicit `Expect: 100-continue` | ~290 bytes (headers only) | **1x** |
+| `pycurl`, `Expect:` suppressed | ~4.8 MiB, then **error** | broken — `CURLE_SEND_FAIL_REWIND` |
 
 `requests` and `httpx` have no `Expect: 100-continue` handshake — adding the
 header by hand does nothing, because they never wait for the `100`. `aiohttp`
 without `expect100` is better than nothing (it interleaves reading the response
 with writing the body, so it aborts partway when the `307` arrives) but still
-wastes whatever was already in flight. Only `aiohttp` with `expect100=True` is
-clean.
+wastes whatever was already in flight. `aiohttp` with `expect100=True` and
+`pycurl` (with `Expect: 100-continue` present) are both clean.
+
+`pycurl` without `Expect: 100-continue` fails more severely than `requests`/`httpx`:
+libcurl streams ~half the body to the locator before the `307` arrives, then tries
+to rewind the file handle to replay the body on the redirect — and fails with
+`CURLE_SEND_FAIL_REWIND` (error 65) because no `CURLOPT_SEEKFUNCTION` was registered.
+The upload is incomplete and the object is never stored. For bodies < 1 MiB, where
+libcurl does not auto-add `Expect: 100-continue`, the explicit header is required.
 
 ## Trial and error — measurement pitfalls
 
@@ -74,8 +84,8 @@ because the obvious measurements are misleading.
 
 3. **A real `io.BufferedReader` subclass works.** Counting every `.read()` on
    such a subclass — the count survives the redirect rewind — gave the honest
-   total: 16,777,216 bytes = **2.00x**. This is what `requests_double_upload_demo.py`
-   does.
+   total: 16,777,216 bytes = **2.00x**. This was the technique used before the
+   TCP proxy approach was developed.
 
 4. **A TCP proxy is the ground truth.** A transparent, byte-counting proxy in
    front of the locator does not depend on the file object at all. It confirmed
@@ -98,7 +108,7 @@ mkdir -p /tmp/so-demo/objects/mybucket
 head -c 8388608 /dev/urandom > /tmp/so-demo/file8m.bin
 
 # client libraries
-pip install requests aiohttp httpx
+pip install requests aiohttp httpx pycurl
 
 # terminal 1 — object server
 OBJECT_DIRECTORY=/tmp/so-demo/objects fastapi dev --port 29171 simpler_objects/object_server.py
@@ -114,35 +124,26 @@ Objects are immutable, so re-running a demo against an existing key returns
 rm -rf /tmp/so-demo/objects/mybucket && mkdir -p /tmp/so-demo/objects/mybucket
 ```
 
-Both scripts hardcode `/tmp/so-demo/file8m.bin` and the locator at
-`localhost:29164` — edit the constants at the top of each file if your setup
-differs.
+The script hardcodes `/tmp/so-demo/file8m.bin` and the locator at
+`localhost:29164` — edit the constants at the top if your setup differs.
 
-### Demo 1 — `requests` uploads twice
-
-```sh
-python upload-behavior-demo/requests_double_upload_demo.py
-```
-
-Expected output — `requests` reads (and therefore uploads) the file twice:
-
-```
-file size                   : 8,388,608 bytes
-redirect chain              : 307 -> 201
-total bytes read by requests: 16,777,216 bytes
-upload multiplier           : 2.00x the file
-```
-
-### Demo 2 — `aiohttp` works, `httpx` does not
+### Running the demo
 
 ```sh
 python upload-behavior-demo/test_expect100.py
 ```
 
-Expected output — a TCP proxy counts bytes reaching the locator for four client
-configurations:
+Expected output — a TCP proxy counts bytes reaching the locator for each client:
 
 ```
+requests (default)
+    bytes client -> locator  : 8,388,804  (1.00x file)
+    => 2x  -- whole body uploaded to the locator AND object server
+
+requests (manual 'Expect: 100-continue' header — ignored)
+    bytes client -> locator  : 8,388,826  (1.00x file)
+    => 2x  -- whole body uploaded to the locator AND object server
+
 aiohttp  (expect100=True)
     bytes client -> locator  : 239  (0.00x file)
     => 1x  -- body skipped the locator (clean)
@@ -158,14 +159,29 @@ httpx    (default)
 httpx    (manual 'Expect: 100-continue' header)
     bytes client -> locator  : 8,388,817  (1.00x file)
     => 2x  -- whole body uploaded to the locator AND object server
+
+pycurl   (default — libcurl auto-adds Expect for bodies >= 1 MiB)
+    bytes client -> locator  : 290  (0.00x file)
+    => 1x  -- body skipped the locator (clean)
+
+pycurl   (explicit 'Expect: 100-continue')
+    bytes client -> locator  : 291  (0.00x file)
+    => 1x  -- body skipped the locator (clean)
+
+pycurl   (Expect: suppressed — confirms 2x without handshake)
+    redirects + final status : [] -> ERROR error: (65, 'necessary data rewind was not possible')
+    bytes client -> locator  : 4,784,128  (0.57x file)
+    => 2x  -- whole body uploaded to the locator AND object server
 ```
 
 The aiohttp-default figure is timing-dependent — it is whatever was in flight
-when the client noticed the `307`.
+when the client noticed the `307`. The pycurl-suppressed case errors with
+`CURLE_SEND_FAIL_REWIND` (error 65): after streaming ~half the body to the locator
+and receiving the `307`, libcurl cannot replay the body on the redirect without a
+registered `CURLOPT_SEEKFUNCTION`. The upload fails entirely.
 
 ## File index
 
 | File | Demonstrates |
 |---|---|
-| `requests_double_upload_demo.py` | `requests` uploads the body 2x. Counts bytes via an `io.BufferedReader` subclass. |
-| `test_expect100.py` | `aiohttp` (`expect100=True`) uploads 1x; `httpx` uploads 2x. Counts bytes with a transparent TCP proxy. |
+| `test_expect100.py` | Full client matrix: `requests` and `httpx` upload 2x; `aiohttp` (`expect100=True`) and `pycurl` upload 1x; `pycurl` with `Expect:` suppressed errors. Counts bytes with a transparent TCP proxy. |

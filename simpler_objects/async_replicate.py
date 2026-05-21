@@ -4,25 +4,25 @@ import argparse
 import warnings
 import random
 import sys
-import requests
+import httpx
 
 TIMEOUT=2048
 
 def find_space(locator, bucket, object_size, current, desired):
     """Find servers with space for replication"""
     # TODO refactor with locator_api.add_object
-    res = requests.get(locator + 'health', timeout=4)
+    res = httpx.get(locator + 'health', timeout=4)
     res.raise_for_status()
     health = res.json()['servers']
     candidates = {server: stats['quota-available-bytes'] * stats['percent'] for server, stats in health.items()
                   if stats['write'] and stats['percent'] > 1
                   and stats['quota-available-bytes'] > object_size + 1024*1024
                   and server not in current}
-    for server in candidates.keys():
+    for server in list(candidates.keys()):
         try:
-            result = requests.head(server + bucket + "/", timeout=1)
+            result = httpx.head(server + bucket + "/", timeout=1)
             result.raise_for_status()
-        except requests.exceptions.RequestException:
+        except httpx.HTTPError:
             candidates.pop(server)
     if not candidates:
         return []
@@ -32,11 +32,11 @@ def find_space(locator, bucket, object_size, current, desired):
 
 def get_object_size(obj, skip_404=False):
     """HEAD an object to determine its size and checksum"""
-    result = requests.head(obj, timeout=2)
+    result = httpx.head(obj, timeout=2)
     if skip_404 and result.status_code == 404:
         return 0, None
     result.raise_for_status()
-    return int(result.headers['Content-Length']), result.headers.get('Repr-Digest')
+    return int(result.headers['content-length']), result.headers.get('repr-digest')
 
 def replicate_object(source, dest):
     """Replicate one object"""
@@ -45,15 +45,14 @@ def replicate_object(source, dest):
     assert size
     assert cksum
     assert not any(get_object_size(dest, skip_404=True))
-    with requests.get(source, stream=True, timeout=TIMEOUT) as get:
+    with httpx.stream("GET", source, timeout=TIMEOUT) as get:
         get.raise_for_status()
-        assert int(get.headers['Content-Length']) == size
-        assert get.headers['Repr-Digest'] == cksum
-        # TODO Repr-Digest? Content-Length?
-        put = requests.put(dest, data=get.raw, timeout=TIMEOUT,
-                           headers={#'Content-Length': str(size),
-                                    'Content-Digest': cksum})#,
-#                                    'Transfer-Encoding': 'identity')
+        assert int(get.headers['content-length']) == size
+        assert get.headers['repr-digest'] == cksum
+        put = httpx.put(dest, content=get.iter_bytes(),
+                        headers={'Content-Length': str(size),
+                                 'Content-Digest': cksum},
+                        timeout=TIMEOUT)
         put.raise_for_status()
     assert get_object_size(dest) == (size, cksum)
     # TODO return checksum also?
@@ -61,7 +60,7 @@ def replicate_object(source, dest):
 
 def get_bucket_contents(bucket):
     """Return each object in a bucket and its size"""
-    result = requests.get(bucket, timeout=10)
+    result = httpx.get(bucket, timeout=10)
     result.raise_for_status()
     return {k: (v['size'], v['checksum'])
             for k, v in result.json()["objects"].items()
@@ -82,7 +81,7 @@ def replicate_bucket(source, dest):
 
 def auto_replica(locator, bucket, replicas):
     """Just figure out where to put stuff and do it"""
-    res = requests.get(locator + bucket + '/', timeout=8)
+    res = httpx.get(locator + bucket + '/', timeout=8)
     res.raise_for_status()
     contents = res.json()
     error = False
