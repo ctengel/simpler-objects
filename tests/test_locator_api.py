@@ -3,9 +3,9 @@
 import httpx
 import pytest
 import respx
-from fastapi.testclient import TestClient
 
 import simpler_objects.locator_api as locator
+from tests.openapi_validation import ValidatingTestClient
 
 SERVER_A = "http://server-a/"
 SERVER_B = "http://server-b/"
@@ -28,7 +28,7 @@ def _health(write=True, available=10 ** 9, percent=50):
 @pytest.fixture()
 def client(monkeypatch):
     monkeypatch.setattr(locator, "OBJECT_SERVERS", f"{SERVER_A},{SERVER_B}")
-    return TestClient(locator.app)
+    return ValidatingTestClient(locator.app)
 
 
 # ---------------------------------------------------------------------------

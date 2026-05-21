@@ -3,9 +3,9 @@
 import base64
 import hashlib
 import pytest
-from fastapi.testclient import TestClient
 
 import simpler_objects.object_server as server
+from tests.openapi_validation import ValidatingTestClient
 
 BUCKET = "test-bucket"
 TEST_FILE = "test-object.bin"
@@ -21,7 +21,7 @@ def _expected_digest(content: bytes) -> str:
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "OBJECT_DIRECTORY", str(tmp_path))
     (tmp_path / BUCKET).mkdir()
-    return TestClient(server.app)
+    return ValidatingTestClient(server.app)
 
 
 @pytest.fixture()

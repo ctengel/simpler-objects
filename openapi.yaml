@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Simpler Objects API
-  version: 0.4.0
+  version: 0.4.1
   description: >
     Example hash values throughout this spec represent SHA-256("hello"):
     hex `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`,
@@ -436,6 +436,8 @@ paths:
           description: Bucket not found
         '422':
           description: Validation Error
+        '503':
+          description: One or more upstream object servers returned an unexpected error (locator-api only)
   /:
     get:
       tags:
