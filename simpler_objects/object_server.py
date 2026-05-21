@@ -99,7 +99,7 @@ async def get_object(bucket: str, key: str):
 async def put_object(bucket: str, key: str, request: Request,
                      content_length: Annotated[int | None, Header()] = None):
 
-    # ensure unique fikename
+    # ensure unique filename
     path = object_filename(bucket, key)
     if path.exists():
         raise HTTPException(status_code=409)
@@ -112,8 +112,9 @@ async def put_object(bucket: str, key: str, request: Request,
         # TODO async? check length? lock?
         async for chunk in request.stream():
             dst.write(chunk)
-    if content_length is not None:
-        assert path.stat().st_size == content_length
+    if content_length is not None and path.stat().st_size != content_length:
+        path.unlink()
+        raise HTTPException(status_code=400)
 
     # Hash and compare
     file_digest = file_checksum(path)

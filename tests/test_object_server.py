@@ -39,6 +39,17 @@ def test_put(client):
     assert resp.headers["Repr-Digest"] == expected
 
 
+def test_put_length_mismatch(client, tmp_path):
+    """A Content-Length disagreeing with the body returns 400 and leaves no file."""
+    resp = client.put(
+        f"/{BUCKET}/{TEST_FILE}",
+        content=TEST_CONTENT,
+        headers={"Content-Length": str(len(TEST_CONTENT) + 100)},
+    )
+    assert resp.status_code == 400
+    assert not (tmp_path / BUCKET / TEST_FILE).exists()
+
+
 def test_get(uploaded):
     resp = uploaded.get(f"/{BUCKET}/{TEST_FILE}")
     assert resp.status_code == 200

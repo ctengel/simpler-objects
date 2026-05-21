@@ -93,6 +93,11 @@ Clients may send `Content-Digest` or `Repr-Digest` with a SHA-256 value (`sha-25
 - **`HEAD /{bucket}/` on the locator** is now supported (previously returned `405`). Returns `200` if the bucket exists on any server, `404` if none have it, `503` for server errors.
 - **Directory entries in `GET /{bucket}/`** now return `"size": null` instead of `"size": 0`. Use the `"directory": true` field to identify directories rather than testing `size == 0`.
 
+### Changes in spec v0.3.0
+
+- **`/health` response renamed `available` to `quota-available-bytes`** (RFC 4331 alignment) and added a `quota-used-bytes` field. Clients reading the old `available` key will break and must switch to `quota-available-bytes`. This applies to the object server's `/health` body and to each per-server entry under `servers` in the locator's `/health` body.
+- **`GET /`** now returns `403` on both the object server and the locator (previously `404`, as no route existed). Bucket enumeration is intentionally not offered.
+
 ## CORS
 
 CORS headers are not configured by default. Web browsers making cross-origin requests will be blocked. To enable browser access from a different origin, add FastAPI's `CORSMiddleware` or place the service behind a reverse proxy that adds the appropriate `Access-Control-Allow-*` headers. Note that `Repr-Digest` is a non-standard response header and would need to be explicitly listed in `Access-Control-Expose-Headers` for JavaScript clients to read it.
