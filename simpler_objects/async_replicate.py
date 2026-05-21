@@ -95,7 +95,7 @@ def auto_replica(locator, bucket, replicas):
             continue
         spaces = find_space(locator, bucket, obj['size'], obj['locations'], desired)
         if not spaces:
-            warnings.warn('No space to replicate object {name}')
+            warnings.warn(f'No space to replicate object {name}')
             error = True
             continue
         if len(spaces) < desired:
