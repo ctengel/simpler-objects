@@ -1,0 +1,231 @@
+"""Tests for simpler_objects.client.
+
+Unit tests cover the pure header/digest helpers. Integration tests launch a real
+object server + locator as uvicorn subprocesses (the in-process TestClient used
+elsewhere cannot exercise real sockets, Expect: 100-continue, or 307 redirects).
+If the subprocesses cannot start, the integration tests skip.
+"""
+
+import asyncio
+import datetime
+import hashlib
+import os
+import pathlib
+import socket
+import subprocess
+import sys
+import threading
+import time
+
+import httpx
+import pytest
+
+from simpler_objects import client
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+BUCKET = "mybucket"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — header / digest helpers
+# ---------------------------------------------------------------------------
+
+def test_encode_parse_digest_roundtrip():
+    raw = hashlib.sha256(b"abc").digest()
+    header = client.encode_digest_header(raw)
+    assert header.startswith("sha-256=:") and header.endswith(":")
+    assert client.parse_digest_header(header) == raw
+
+
+def test_parse_digest_header_picks_sha256_among_many():
+    raw = hashlib.sha256(b"xyz").digest()
+    value = f"sha-512=:AAAA:, {client.encode_digest_header(raw)}"
+    assert client.parse_digest_header(value) == raw
+
+
+def test_parse_digest_header_none_and_missing():
+    assert client.parse_digest_header(None) is None
+    assert client.parse_digest_header("") is None
+    assert client.parse_digest_header("md5=:AAAA:") is None
+
+
+def test_read_content_disposition():
+    assert client.read_content_disposition('attachment; filename="hi.txt"') == "hi.txt"
+    assert client.read_content_disposition("inline") is None
+    assert client.read_content_disposition(None) is None
+
+
+def test_read_http_datetime():
+    parsed = client.read_http_datetime("Sun, 04 Jan 2026 18:19:00 GMT")
+    assert parsed == datetime.datetime(2026, 1, 4, 18, 19, 0)
+    assert client.read_http_datetime(None) is None
+
+
+def test_file_checksum(tmp_path):
+    target = tmp_path / "data.bin"
+    payload = os.urandom(5 * 1024 * 1024 + 17)  # spans several BLOCK_SIZE reads
+    target.write_bytes(payload)
+    assert client.file_checksum(target) == hashlib.sha256(payload).digest()
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — live object server + locator
+# ---------------------------------------------------------------------------
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _wait_for(url: str, timeout: float = 20.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if httpx.get(url, timeout=1).status_code == 200:
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(0.15)
+    return False
+
+
+def _spawn(module: str, port: int, env_extra: dict) -> subprocess.Popen:
+    return subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", f"simpler_objects.{module}:app",
+         "--port", str(port), "--log-level", "warning"],
+        cwd=REPO_ROOT, env={**os.environ, **env_extra},
+    )
+
+
+@pytest.fixture(scope="module")
+def servers(tmp_path_factory):
+    """Run a real object server + locator; yield connection info."""
+    obj_dir = tmp_path_factory.mktemp("objects")
+    (obj_dir / BUCKET).mkdir()
+    obj_port, loc_port = _free_port(), _free_port()
+
+    obj_proc = _spawn("object_server", obj_port,
+                      {"OBJECT_DIRECTORY": str(obj_dir)})
+    loc_proc = _spawn("locator_api", loc_port,
+                      {"OBJECT_SERVERS": f"http://127.0.0.1:{obj_port}/"})
+    try:
+        if not (_wait_for(f"http://127.0.0.1:{obj_port}/health")
+                and _wait_for(f"http://127.0.0.1:{loc_port}/health")):
+            pytest.skip("could not start object server / locator subprocesses")
+        yield {"locator": f"http://127.0.0.1:{loc_port}", "obj_dir": obj_dir}
+    finally:
+        for proc in (loc_proc, obj_proc):
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+def _object_url(servers, prefix: str) -> str:
+    return f"{servers['locator']}/{BUCKET}/{prefix}-{os.urandom(4).hex()}"
+
+
+def test_upload_download_roundtrip(servers, tmp_path):
+    data = os.urandom(2 * 1024 * 1024 + 5)
+    src = tmp_path / "src.bin"
+    src.write_bytes(data)
+    url = _object_url(servers, "rt")
+
+    assert client.simple_upload(str(src), url) == hashlib.sha256(data).digest()
+
+    dst = tmp_path / "dst.bin"
+    digest, mime, sugg, mtime = client.simple_download(url, str(dst))
+    assert digest == hashlib.sha256(data).digest()
+    assert dst.read_bytes() == data
+    assert mime is not None
+    assert isinstance(mtime, datetime.datetime)
+
+
+def test_download_missing_raises(servers, tmp_path):
+    dst = tmp_path / "missing"
+    with pytest.raises(client.ClientError) as excinfo:
+        client.simple_download(_object_url(servers, "nope"), str(dst))
+    assert excinfo.value.status == 404
+    assert not dst.exists()
+
+
+def test_upload_conflict_raises(servers, tmp_path):
+    src = tmp_path / "dup.bin"
+    src.write_bytes(b"conflict")
+    url = _object_url(servers, "dup")
+    client.simple_upload(str(src), url)
+    with pytest.raises(client.ClientError) as excinfo:
+        client.simple_upload(str(src), url)
+    assert excinfo.value.status == 409
+
+
+def test_download_digest_mismatch_raises(servers, tmp_path):
+    """A stored object tampered after upload fails the Repr-Digest check."""
+    src = tmp_path / "tamper.bin"
+    src.write_bytes(os.urandom(64 * 1024))
+    url = _object_url(servers, "corrupt")
+    client.simple_upload(str(src), url)
+
+    stored = servers["obj_dir"] / BUCKET / url.rsplit("/", 1)[-1]
+    stored.write_bytes(b"tampered")  # checksum record still claims the old hash
+
+    dst = tmp_path / "tamper-dl"
+    with pytest.raises(client.ClientError, match="digest mismatch"):
+        client.simple_download(url, str(dst))
+    assert not dst.exists()
+
+
+def test_upload_does_not_send_body_to_locator(servers, tmp_path):
+    """Issue #26: Expect: 100-continue must keep the body off the locator leg."""
+    loc = httpx.URL(servers["locator"])
+    counted = {"up": 0}
+
+    async def _handle(client_reader, client_writer):
+        up_reader, up_writer = await asyncio.open_connection(loc.host, loc.port)
+
+        async def _pump(src, dst, count):
+            try:
+                while True:
+                    chunk = await src.read(65536)
+                    if not chunk:
+                        break
+                    if count:
+                        counted["up"] += len(chunk)
+                    dst.write(chunk)
+                    await dst.drain()
+            except OSError:
+                pass
+            finally:
+                if not dst.is_closing():
+                    dst.close()
+
+        await asyncio.gather(_pump(client_reader, up_writer, True),
+                             _pump(up_reader, client_writer, False))
+
+    proxy = {}
+    ready = threading.Event()
+
+    def _serve():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        server = loop.run_until_complete(
+            asyncio.start_server(_handle, "127.0.0.1", 0))
+        proxy["port"] = server.sockets[0].getsockname()[1]
+        ready.set()
+        loop.run_until_complete(server.serve_forever())
+
+    threading.Thread(target=_serve, daemon=True).start()
+    assert ready.wait(5)
+
+    size = 4 * 1024 * 1024
+    src = tmp_path / "big.bin"
+    src.write_bytes(os.urandom(size))
+    proxy_url = (f"http://127.0.0.1:{proxy['port']}/{BUCKET}/"
+                 f"skip-{os.urandom(4).hex()}")
+    client.simple_upload(str(src), proxy_url)
+    time.sleep(0.4)  # let the proxy drain any buffered bytes
+
+    assert counted["up"] < size * 0.05, (
+        f"{counted['up']:,} bytes reached the locator — body was not skipped")

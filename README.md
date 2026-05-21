@@ -84,13 +84,30 @@ The locator returns `307 Temporary Redirect` for `GET`, `HEAD`, and `PUT` on `/{
 
 A `PUT` to the locator is answered with a `307` redirect, and the locator never reads the request body. Without coordination a client uploads the entire object to the locator and then again to the object server, transferring the data twice. Sending `Expect: 100-continue` avoids this: the locator returns the `307` in place of `100 Continue`, so a compliant client discards the upload and sends the body only to the object server (which does emit `100 Continue`).
 
-Not all clients send `Expect: 100-continue`. `curl` adds it automatically only for request bodies of 1 MiB or larger; for smaller bodies — and for clients such as Python `requests` and `httpx`, which have no `Expect: 100-continue` support — the client streams the whole object to the locator, receives the `307`, then re-uploads it to the object server, transferring the data twice (confirmed here with 8 MiB `requests` and `httpx` uploads). Send `Expect: 100-continue` explicitly on every PUT to avoid this; Python uploaders should use `aiohttp` or `pycurl` (see below). Even then the client's expect-continue timeout applies: if the locator is slow to select a server (for example when an object server is down) the client may begin uploading before the `307` arrives.
+Not all clients send `Expect: 100-continue`. `curl` adds it automatically only for request bodies of 1 MiB or larger; for smaller bodies — and for clients such as Python `requests` and `httpx`, which have no `Expect: 100-continue` support — the client streams the whole object to the locator, receives the `307`, then re-uploads it to the object server, transferring the data twice (confirmed here with 8 MiB `requests` and `httpx` uploads). Send `Expect: 100-continue` explicitly on every PUT to avoid this; Python uploaders should use the bundled `simpler_objects.client` library (see below). Even then the client's expect-continue timeout applies: if the locator is slow to select a server (for example when an object server is down) the client may begin uploading before the `307` arrives.
 
-### Python clients: `aiohttp` or `pycurl` instead of `requests`
+### Python clients: use `simpler_objects.client`
 
-Python's `requests` and `httpx` have no `Expect: 100-continue` handshake, so an upload helper built on either always transfers the body twice. Two good alternatives are verified to work:
+`requests` and `httpx` have no `Expect: 100-continue` handshake, so an upload helper built on either always transfers the body twice. The repository ships a lightweight client library, [`simpler_objects/client.py`](simpler_objects/client.py), that handles the handshake, the `307` redirect, `Content-Length`, and SHA-256 verification on both ends:
 
-**`aiohttp`** (`expect100=True`) — pure Python, async-native, wraps cleanly in a synchronous helper:
+```python
+from simpler_objects.client import simple_upload, simple_download
+
+# PUT a local file through the locator — body uploaded once, not twice
+simple_upload("photo.jpg", "http://localhost:29164/mybucket/photo.jpg")
+
+# GET it back — streamed to disk, SHA-256 verified against Repr-Digest
+digest, mime, suggested_name, mtime = simple_download(
+    "http://localhost:29164/mybucket/photo.jpg", "out.jpg")
+```
+
+`simple_upload` computes the file's SHA-256, sends it as `Content-Digest`, and checks it against the object server's `Repr-Digest` reply; `simple_download` verifies the downloaded bytes the same way. Both raise `simpler_objects.client.ClientError` on an HTTP error or a digest mismatch.
+
+The library is synchronous and built on `pycurl`, which (with its system `libcurl`) must be installed. `pycurl` was chosen over `aiohttp` after a throughput bake-off — see [`upload-behavior-demo/`](upload-behavior-demo/) for the measurements and the investigation notes behind this guidance.
+
+### Async clients: `aiohttp`
+
+`simpler_objects.client` is synchronous — `pycurl` has no asyncio integration. Code that needs an async client should use `aiohttp` directly with `expect100=True`. It is pure Python and async-native, and still wraps cleanly in a synchronous helper:
 
 ```python
 import asyncio
@@ -118,32 +135,7 @@ def simple_upload(filename, url, file_mime, checksum_val=None):
 
 - Do not call `asyncio.run()` from code already inside an event loop — there, make the helper `async def` and `await` the upload directly.
 - Uploading many files? Create one `ClientSession` and reuse it instead of one per call.
-
-**`pycurl`** — synchronous, no asyncio required; libcurl handles the handshake natively:
-
-```python
-import os
-import pycurl
-
-def simple_upload(filename, url):
-    """PUT a file to a locator URL; body uploaded once via Expect: 100-continue."""
-    c = pycurl.Curl()
-    c.setopt(pycurl.URL, url)
-    c.setopt(pycurl.UPLOAD, 1)
-    c.setopt(pycurl.FOLLOWLOCATION, 1)
-    c.setopt(pycurl.HTTPHEADER, ['Expect: 100-continue'])
-    with open(filename, 'rb') as f:
-        c.setopt(pycurl.READDATA, f)
-        c.setopt(pycurl.INFILESIZE, os.path.getsize(filename))
-        c.perform()
-    c.close()
-```
-
-libcurl automatically adds `Expect: 100-continue` for bodies ≥ 1 MiB, but setting it explicitly (as above) is recommended so small files are also handled correctly. Requires libcurl to be installed (`pip install pycurl`). Verified: only ~290 bytes (headers) reach the locator.
-
-Choose `aiohttp` if you are already in an async codebase or want a pure-Python dependency. Choose `pycurl` if you prefer synchronous code or want to avoid asyncio entirely.
-
-Runnable demos that measure this behavior, and the investigation notes behind this guidance, are in [`upload-behavior-demo/`](upload-behavior-demo/).
+- `aiohttp` uploads are slower than `pycurl` for large files (see the throughput bake-off in [`upload-behavior-demo/`](upload-behavior-demo/)); the trade-off buys native asyncio support.
 
 ### `Content-Length` on PUT
 

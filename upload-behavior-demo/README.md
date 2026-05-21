@@ -3,9 +3,9 @@
 This directory records an investigation into how HTTP clients upload through
 `locator_api`, and the demo scripts that prove the behavior. The client-facing
 conclusions live in the main [README](../README.md) under *Client guidance*
-(`Expect: 100-continue on PUT` and `Python clients: aiohttp instead of
-requests`); this document is the reasoning, the measurements, and the
-trial-and-error behind them.
+(`Expect: 100-continue on PUT` and `Python clients: use
+simpler_objects.client`); this document is the reasoning, the measurements, and
+the trial-and-error behind them.
 
 ## TL;DR
 
@@ -62,6 +62,31 @@ to rewind the file handle to replay the body on the redirect — and fails with
 `CURLE_SEND_FAIL_REWIND` (error 65) because no `CURLOPT_SEEKFUNCTION` was registered.
 The upload is incomplete and the object is never stored. For bodies < 1 MiB, where
 libcurl does not auto-add `Expect: 100-continue`, the explicit header is required.
+
+## Throughput bake-off: picking a client library (issue #21)
+
+The matrix above settles *correctness* — which clients avoid the 2x penalty.
+Issue #21 also needs a *throughput* winner for the `simpler_objects.client`
+library. `bench_throughput.py` measures wall-clock throughput for `aiohttp`
+(`expect100=True`) and `pycurl`, uploading and downloading a large file through
+the locator.
+
+Measured (1 GiB file, 5 runs each, localhost, tmpfs object store):
+
+| Direction | aiohttp | pycurl | Result |
+|---|---|---|---|
+| upload | ~103 MiB/s | ~150 MiB/s | **pycurl, ~1.45x faster** |
+| download | ~224 MiB/s | ~203 MiB/s | aiohttp, ~1.10x faster |
+
+`pycurl` wins the upload — the critical path, since the upload is what carries
+the 2x-penalty fix. The gap is real, not noise: `aiohttp` streams a file body
+in 64 KiB chunks dispatched to a thread-pool executor, while libcurl reads the
+file descriptor directly in C. Download is close to a tie.
+
+**`simpler_objects/client.py` is therefore built on `pycurl`**, and is
+synchronous (`pycurl` has no native asyncio integration). Throughput varies
+with hardware, disk, and file size — re-run `bench_throughput.py` to measure
+your own.
 
 ## Trial and error — measurement pitfalls
 
@@ -185,3 +210,4 @@ registered `CURLOPT_SEEKFUNCTION`. The upload fails entirely.
 | File | Demonstrates |
 |---|---|
 | `test_expect100.py` | Full client matrix: `requests` and `httpx` upload 2x; `aiohttp` (`expect100=True`) and `pycurl` upload 1x; `pycurl` with `Expect:` suppressed errors. Counts bytes with a transparent TCP proxy. |
+| `bench_throughput.py` | Throughput bake-off: `aiohttp` vs `pycurl`, upload and download of a large file through the locator. Picks the `simpler_objects.client` base library (issue #21). |
