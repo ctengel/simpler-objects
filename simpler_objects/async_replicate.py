@@ -14,9 +14,9 @@ def find_space(locator, bucket, object_size, current, desired):
     res = requests.get(locator + 'health', timeout=4)
     res.raise_for_status()
     health = res.json()['servers']
-    candidates = {server: stats['available'] * stats['percent'] for server, stats in health.items()
+    candidates = {server: stats['quota-available-bytes'] * stats['percent'] for server, stats in health.items()
                   if stats['write'] and stats['percent'] > 1
-                  and stats['available'] > object_size + 1024*1024
+                  and stats['quota-available-bytes'] > object_size + 1024*1024
                   and server not in current}
     for server in candidates.keys():
         try:

@@ -93,6 +93,10 @@ Clients may send `Content-Digest` or `Repr-Digest` with a SHA-256 value (`sha-25
 - **`HEAD /{bucket}/` on the locator** is now supported (previously returned `405`). Returns `200` if the bucket exists on any server, `404` if none have it, `503` for server errors.
 - **Directory entries in `GET /{bucket}/`** now return `"size": null` instead of `"size": 0`. Use the `"directory": true` field to identify directories rather than testing `size == 0`.
 
+## CORS
+
+CORS headers are not configured by default. Web browsers making cross-origin requests will be blocked. To enable browser access from a different origin, add FastAPI's `CORSMiddleware` or place the service behind a reverse proxy that adds the appropriate `Access-Control-Allow-*` headers. Note that `Repr-Digest` is a non-standard response header and would need to be explicitly listed in `Access-Control-Expose-Headers` for JavaScript clients to read it.
+
 ## ObjectIndex
 
 Optionally on ports 46569 (API) and 46567 (GUI).  Will be lowered/changed in future.

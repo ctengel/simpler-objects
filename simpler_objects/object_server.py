@@ -69,7 +69,8 @@ def healthcheck():
     disk_stats = shutil.disk_usage(pathlib.Path(OBJECT_DIRECTORY))
     r = {'read': True,
          'write': True,
-         'available': disk_stats.free,
+         'quota-available-bytes': disk_stats.free,
+         'quota-used-bytes': disk_stats.used,
          'percent': int(float(disk_stats.free)/float(disk_stats.total)*100.0)}
     return r
 
@@ -130,7 +131,11 @@ async def put_object(bucket: str, key: str, request: Request,
     return Response(status_code=201, content=None,
                     headers={"Repr-Digest": http_digest_head(file_digest)})
 
-# TODO root bucket list
+@app.get("/")
+def list_buckets():
+    """List buckets — not permitted"""
+    raise HTTPException(status_code=403)
+
 # TODO lightweight head
 @app.api_route("/{bucket}/", methods=['GET', 'HEAD'])
 def list_directory(bucket: str):

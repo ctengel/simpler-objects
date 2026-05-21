@@ -24,7 +24,7 @@ def get_object_server_health(url: str):
         result = requests.get(url + 'health', timeout=1)
         result.raise_for_status()
     except requests.exceptions.RequestException:
-        return {'write': False, 'read': False, 'available': 0, 'percent': 0}
+        return {'write': False, 'read': False, 'quota-available-bytes': 0, 'quota-used-bytes': 0, 'percent': 0}
     return result.json()
 
 @app.get('/health')
@@ -53,9 +53,9 @@ def add_object(bucket: str, key: str, content_length: Annotated[int | None, Head
     # TODO use caches of objects and servers but then double check vs checking everybody
     all_obj_servers = object_servers()
     health = {server: get_object_server_health(server) for server in all_obj_servers}
-    candidates = {server: stats['available'] * stats['percent'] for server, stats in health.items()
+    candidates = {server: stats['quota-available-bytes'] * stats['percent'] for server, stats in health.items()
                   if stats['write'] and stats['percent'] > 1
-                  and stats['available'] > object_size + 1024*1024}
+                  and stats['quota-available-bytes'] > object_size + 1024*1024}
     for server in all_obj_servers:
         try:
             result = requests.head(server + object_path, timeout=1)
@@ -74,6 +74,11 @@ def add_object(bucket: str, key: str, content_length: Annotated[int | None, Head
         raise HTTPException(507)
     server_to_upload = random.choices(list(candidates.keys()), list(candidates.values()))[0]
     return RedirectResponse(url=server_to_upload+object_path)
+
+@app.get("/")
+def list_buckets():
+    """List buckets — not permitted"""
+    raise HTTPException(status_code=403)
 
 @app.head("/{bucket}/")
 def head_bucket(bucket: str):
