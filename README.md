@@ -80,6 +80,45 @@ Note that ObjectIndex has a legacy way to manage this. Simply move your old file
 
 The locator returns `307 Temporary Redirect` for `GET`, `HEAD`, and `PUT` on `/{bucket}/{key}`. Clients must follow redirects and must preserve the original HTTP method — particularly for PUT. Use `curl -L`; verify your HTTP library honours 307 method preservation for non-GET requests.
 
+### `Expect: 100-continue` on PUT
+
+A `PUT` to the locator is answered with a `307` redirect, and the locator never reads the request body. Without coordination a client uploads the entire object to the locator and then again to the object server, transferring the data twice. Sending `Expect: 100-continue` avoids this: the locator returns the `307` in place of `100 Continue`, so a compliant client discards the upload and sends the body only to the object server (which does emit `100 Continue`).
+
+Not all clients send `Expect: 100-continue`. `curl` adds it automatically only for request bodies of 1 MiB or larger; for smaller bodies — and for clients such as Python `requests` and `httpx`, which have no `Expect: 100-continue` support — the client streams the whole object to the locator, receives the `307`, then re-uploads it to the object server, transferring the data twice (confirmed here with 8 MiB `requests` and `httpx` uploads). Send `Expect: 100-continue` explicitly on every PUT to avoid this; Python uploaders should use `aiohttp` (see below). Even then the client's expect-continue timeout applies: if the locator is slow to select a server (for example when an object server is down) the client may begin uploading before the `307` arrives.
+
+### Python clients: `aiohttp` instead of `requests`
+
+Python's `requests` and `httpx` have no `Expect: 100-continue` handshake, so an upload helper built on either always transfers the body twice. `aiohttp` supports it via `expect100=True`, and drops into an existing synchronous helper without changing its signature — wrap the async call in `asyncio.run()`:
+
+```python
+import asyncio
+import base64
+import aiohttp
+
+def simple_upload(filename, url, file_mime, checksum_val=None):
+    """PUT a file to a locator URL; body uploaded once via Expect: 100-continue."""
+    headers = {'Content-Type': file_mime}
+    if checksum_val:  # raw 32-byte SHA-256 digest
+        headers['Content-Digest'] = (
+            f"sha-256=:{base64.b64encode(checksum_val).decode()}:")
+
+    async def _put():
+        async with aiohttp.ClientSession() as session:
+            with open(filename, 'rb') as f:
+                async with session.put(url, data=f, headers=headers,
+                                       expect100=True) as response:
+                    response.raise_for_status()
+
+    asyncio.run(_put())
+```
+
+The function stays synchronous, so callers are unchanged. `expect100=True` makes aiohttp wait for `100 Continue` before sending the body; the locator replies `307` instead, so the body skips the locator entirely. aiohttp follows the `307` automatically, exactly as `requests` does. Verified with an 8 MiB upload: only request headers (~240 bytes) reach the locator.
+
+- Do not call `asyncio.run()` from code already inside an event loop — there, make the helper `async def` and `await` the upload directly.
+- Uploading many files? Create one `ClientSession` and reuse it instead of one per call.
+
+Runnable demos that measure this behavior, and the investigation notes behind this guidance, are in [`upload-behavior-demo/`](upload-behavior-demo/).
+
 ### `Content-Length` on PUT
 
 `Content-Length` is optional but highly recommended and may become mandatory again in a future version. Sending it allows the locator to select a server with sufficient free space (if omitted, 1 GiB is assumed) and allows the object server to verify the upload was received intact.

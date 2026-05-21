@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Simpler Objects API
-  version: 0.3.0
+  version: 0.3.1
   description: >
     Example hash values throughout this spec represent SHA-256("hello"):
     hex `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`,
@@ -248,6 +248,14 @@ paths:
         it will be returned on subsequent GET requests. Exact Content-Type preservation
         (returning the original value verbatim) is a future enhancement — current implementations
         may probe the MIME type from the file extension.
+
+
+        Clients PUTting through the locator should send the `Expect: 100-continue` header.
+        The locator answers PUT with a `307` redirect and never reads the request body; with
+        the handshake it returns the `307` in place of `100 Continue`, so the body is sent
+        only to the object server. Without it the body is uploaded twice — once to the
+        locator (which discards it) and once to the object server. `requests` and `httpx`
+        do not perform the handshake; `aiohttp` does, via `expect100=True`.
       operationId: putObject
       parameters:
       - name: bucket
@@ -271,6 +279,19 @@ paths:
           type: integer
           title: Content-Length
         example: 1048576
+      - name: Expect
+        in: header
+        required: false
+        description: >-
+          Recommended when PUTting through the locator: sending `100-continue` makes the
+          client wait for a `100 Continue` before sending the body, so the body skips the
+          locator instead of being uploaded twice. See the operation description.
+        schema:
+          type: string
+          enum:
+            - 100-continue
+          title: Expect
+        example: 100-continue
       requestBody:
         required: true
         content:
