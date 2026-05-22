@@ -86,14 +86,17 @@ def append_checksum(path: pathlib.Path, file_digest: bytes):
 def read_checksum(bucket_dir: pathlib.Path, key: str):
     """Return the recorded SHA-256 digest for a key, or None.
 
-    Lines that do not split into exactly two fields (e.g. torn by a pre-atomic
-    crash) are skipped rather than raising.
+    Lines that do not parse cleanly (torn by a crash, or a torn fragment
+    merged with the next append) are skipped rather than raising.
     """
     try:
         with open(checksum_filename(bucket_dir), encoding='utf-8') as fp:
             for line in fp:
                 parts = line.strip().split()
-                if len(parts) != 2:
+                # A valid sha256sum line has exactly two fields and a 64-char hex digest.
+                # Fewer/more fields catches truly torn lines; the length check catches a
+                # torn fragment that absorbed a later append (making one garbage field).
+                if len(parts) != 2 or len(parts[0]) != 64:
                     continue
                 checksum, file_name = parts
                 if file_name == key:
