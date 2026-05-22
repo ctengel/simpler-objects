@@ -3,17 +3,28 @@
 import asyncio
 import os
 import random
+from contextlib import asynccontextmanager
 from typing import Annotated
 import httpx
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import RedirectResponse, Response
 
-app = FastAPI()
-
 OBJECT_SERVERS = os.environ.get('OBJECT_SERVERS', 'http://localhost:46579/')
 
 # Fallback Retry-After on a busy 503; matches the object server's own constant.
 RETRY_AFTER = "64"
+
+# One HTTP client shared across all requests, so connections to the object
+# servers are pooled and reused; closed on shutdown by the lifespan handler.
+client = httpx.AsyncClient()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Close the shared HTTP client when the app shuts down."""
+    yield
+    await client.aclose()
+
+app = FastAPI(lifespan=lifespan)
 
 def object_servers(randomized=False):
     """Return a randomized list of object server URLs"""
@@ -22,7 +33,7 @@ def object_servers(randomized=False):
         random.shuffle(servers)
     return servers
 
-async def get_object_server_health(client: httpx.AsyncClient, url: str):
+async def get_object_server_health(url: str):
     """Get the health of an object server"""
     try:
         result = await client.get(url + 'health', timeout=1)
@@ -35,8 +46,7 @@ async def get_object_server_health(client: httpx.AsyncClient, url: str):
 async def healthcheck():
     """Return basic info on cluster health"""
     servers = object_servers()
-    async with httpx.AsyncClient() as client:
-        healths = await asyncio.gather(*[get_object_server_health(client, s) for s in servers])
+    healths = await asyncio.gather(*[get_object_server_health(s) for s in servers])
     return {'servers': dict(zip(servers, healths))}
 
 @app.api_route("/{bucket}/{key}", methods=["GET", "HEAD"])
@@ -52,17 +62,16 @@ async def find_object(bucket: str, key: str):
     busy = False
     retry_after = None
     # Sequential by design: randomised order spreads load; first healthy server wins.
-    async with httpx.AsyncClient() as client:
-        for server in object_servers(randomized=True):
-            try:
-                result = await client.head(server + object_path, timeout=1)
-            except httpx.HTTPError:
-                continue
-            if result.status_code == 200:
-                return RedirectResponse(url=server + object_path)
-            if result.status_code == 503:
-                busy = True
-                retry_after = result.headers.get("Retry-After", retry_after)
+    for server in object_servers(randomized=True):
+        try:
+            result = await client.head(server + object_path, timeout=1)
+        except httpx.HTTPError:
+            continue
+        if result.status_code == 200:
+            return RedirectResponse(url=server + object_path)
+        if result.status_code == 503:
+            busy = True
+            retry_after = result.headers.get("Retry-After", retry_after)
     if busy:
         raise HTTPException(status_code=503,
                             headers={"Retry-After": retry_after or RETRY_AFTER})
@@ -76,47 +85,47 @@ async def add_object(bucket: str, key: str, content_length: Annotated[int | None
     object_path = f"{bucket}/{key}"
     # TODO use caches of objects and servers but then double check vs checking everybody
     all_obj_servers = object_servers()
-    # Three sequential phases, each parallelised across servers.
-    # Each phase feeds the next, so they cannot be collapsed into one gather.
-    async with httpx.AsyncClient() as client:
-        # Phase 1: health — builds the initial candidates set.
-        healths = await asyncio.gather(*[get_object_server_health(client, s) for s in all_obj_servers])
-        health = dict(zip(all_obj_servers, healths))
-        candidates = {server: stats['quota-available-bytes'] * stats['percent']
-                      for server, stats in health.items()
-                      if stats['write'] and stats['percent'] > 1
-                      and stats['quota-available-bytes'] > content_length + 1024*1024}
 
-        async def check_exists(server):
-            try:
-                result = await client.head(server + object_path, timeout=1)
-                return server, result.status_code
-            except httpx.HTTPError:
-                return server, None
+    async def check_exists(server):
+        try:
+            result = await client.head(server + object_path, timeout=1)
+            return server, result.status_code
+        except httpx.HTTPError:
+            return server, None
 
-        # Phase 2: existence — checks all servers, not just candidates, because
-        # the object must not exist anywhere in the cluster regardless of whether
-        # a server is currently writable. Unreachable servers are dropped from candidates.
-        exist_results = await asyncio.gather(*[check_exists(s) for s in all_obj_servers])
-        for server, status in exist_results:
-            if status is None:
-                candidates.pop(server, None)
-            elif status != 404:
-                raise HTTPException(status_code=409)
+    # Health and existence are independent fan-outs over every server, so they
+    # run concurrently. Existence must cover all servers, not just writable
+    # candidates: the object must not already exist anywhere in the cluster.
+    health_fut = asyncio.gather(*[get_object_server_health(s) for s in all_obj_servers])
+    exist_fut = asyncio.gather(*[check_exists(s) for s in all_obj_servers])
+    healths = await health_fut
+    exist_results = await exist_fut
 
-        async def check_bucket(server):
-            try:
-                result = await client.head(server + bucket + "/", timeout=1)
-                result.raise_for_status()
-                return server, True
-            except httpx.HTTPError:
-                return server, False
+    health = dict(zip(all_obj_servers, healths))
+    candidates = {server: stats['quota-available-bytes'] * stats['percent']
+                  for server, stats in health.items()
+                  if stats['write'] and stats['percent'] > 1
+                  and stats['quota-available-bytes'] > content_length + 1024*1024}
+    for server, status in exist_results:
+        if status is None:
+            candidates.pop(server, None)
+        elif status != 404:
+            raise HTTPException(status_code=409)
 
-        # Phase 3: bucket — verifies the target bucket exists on each remaining candidate.
-        bucket_results = await asyncio.gather(*[check_bucket(s) for s in list(candidates.keys())])
-        for server, ok in bucket_results:
-            if not ok:
-                candidates.pop(server, None)
+    async def check_bucket(server):
+        try:
+            result = await client.head(server + bucket + "/", timeout=1)
+            result.raise_for_status()
+            return server, True
+        except httpx.HTTPError:
+            return server, False
+
+    # Final stage: verify the bucket exists on each surviving candidate. It must
+    # follow the stage above — it depends on the pruned candidate set.
+    bucket_results = await asyncio.gather(*[check_bucket(s) for s in list(candidates.keys())])
+    for server, ok in bucket_results:
+        if not ok:
+            candidates.pop(server, None)
 
     if not candidates:
         raise HTTPException(507)
@@ -131,47 +140,37 @@ def list_buckets():
 @app.head("/{bucket}/")
 async def head_bucket(bucket: str):
     """Check if a bucket exists on any server"""
-    async with httpx.AsyncClient() as client:
-        async def check_server(server):
-            try:
-                result = await client.head(server + bucket + "/", timeout=2)
-                return result.status_code
-            except httpx.HTTPError:
-                return None
+    async def check_server(server):
+        try:
+            result = await client.head(server + bucket + "/", timeout=2)
+            return result.status_code
+        except httpx.HTTPError:
+            return None
 
-        # All tasks start in parallel. asyncio.wait(FIRST_COMPLETED) lets us return
-        # as soon as any server confirms 200, cancelling the rest rather than waiting
-        # for the slowest one. asyncio.gather would always wait for all of them.
-        tasks = {asyncio.create_task(check_server(s)) for s in object_servers()}
-        error = False
-        while tasks:
-            done, tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for t in done:
-                if t.result() == 200:
-                    for pending in tasks:
-                        pending.cancel()
-                    return Response(status_code=200)
-                if t.result() is None or t.result() != 404:
-                    error = True
+    # All servers queried in parallel; any 200 means the bucket exists.
+    statuses = await asyncio.gather(*[check_server(s) for s in object_servers()])
 
-    if error:
+    if 200 in statuses:
+        return Response(status_code=200)
+    if any(s != 404 for s in statuses):
+        # 503, not 502/504: the locator coordinates object servers but is not
+        # itself a gateway/proxy, so gateway-specific codes don't apply.
         raise HTTPException(status_code=503)
     raise HTTPException(status_code=404)
 
 @app.get("/{bucket}/")
 async def list_bucket(bucket: str):
     """List all items in a bucket"""
-    async with httpx.AsyncClient() as client:
-        async def fetch_server(server):
-            try:
-                result = await client.get(server + bucket + '/', timeout=2)
-            except httpx.HTTPError:
-                return server, None
-            return server, result
+    async def fetch_server(server):
+        try:
+            result = await client.get(server + bucket + '/', timeout=2)
+        except httpx.HTTPError:
+            return server, None
+        return server, result
 
-        # All servers queried in parallel; gather preserves order so the merge
-        # loop below sees results in the same fixed sequence every time.
-        results = await asyncio.gather(*[fetch_server(s) for s in object_servers()])
+    # All servers queried in parallel; gather preserves order so the merge
+    # loop below sees results in the same fixed sequence every time.
+    results = await asyncio.gather(*[fetch_server(s) for s in object_servers()])
 
     items = {}
     for server, result in results:
