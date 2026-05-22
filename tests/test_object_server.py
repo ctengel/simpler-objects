@@ -68,6 +68,36 @@ def test_head(uploaded):
     assert resp.headers["Repr-Digest"] == expected
 
 
+@pytest.fixture()
+def readonly_client(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "OBJECT_DIRECTORY", str(tmp_path))
+    monkeypatch.setattr(server, "READ_ONLY", True)
+    (tmp_path / BUCKET).mkdir()
+    return ValidatingTestClient(server.app)
+
+
+def test_readonly_put_rejected(readonly_client):
+    resp = readonly_client.put(f"/{BUCKET}/{TEST_FILE}", content=TEST_CONTENT)
+    assert resp.status_code == 405
+
+
+def test_readonly_health_write_false(readonly_client):
+    resp = readonly_client.get("/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["write"] is False
+    assert data["read"] is True
+
+
+def test_readonly_get_allowed(readonly_client, tmp_path):
+    """Read-only mode does not block GET on existing objects."""
+    obj_path = tmp_path / BUCKET / TEST_FILE
+    obj_path.write_bytes(TEST_CONTENT)
+    resp = readonly_client.get(f"/{BUCKET}/{TEST_FILE}")
+    assert resp.status_code == 200
+    assert resp.content == TEST_CONTENT
+
+
 @pytest.mark.parametrize("filename,expected_mime", [
     ("file.txt", "text/plain"),
     ("image.png", "image/png"),

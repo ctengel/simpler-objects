@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, Response
 app = FastAPI()
 
 OBJECT_DIRECTORY = os.environ.get('OBJECT_DIRECTORY', '.')
+READ_ONLY = bool(os.environ.get('READ_ONLY', ''))
 BUFFER = 67108864
 
 def checksum_filename(bucket: pathlib.Path):
@@ -68,7 +69,7 @@ def healthcheck():
     """Return basic info on node health"""
     disk_stats = shutil.disk_usage(pathlib.Path(OBJECT_DIRECTORY))
     r = {'read': True,
-         'write': True,
+         'write': not READ_ONLY,
          'quota-available-bytes': disk_stats.free,
          'quota-used-bytes': disk_stats.used,
          'percent': int(float(disk_stats.free)/float(disk_stats.total)*100.0)}
@@ -98,6 +99,8 @@ async def get_object(bucket: str, key: str):
 @app.put("/{bucket}/{key}")
 async def put_object(bucket: str, key: str, request: Request,
                      content_length: Annotated[int | None, Header()] = None):
+    if READ_ONLY:
+        raise HTTPException(status_code=405)
 
     # ensure unique filename
     path = object_filename(bucket, key)

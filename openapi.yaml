@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Simpler Objects API
-  version: 0.4.1
+  version: 0.4.2
   description: >
     Example hash values throughout this spec represent SHA-256("hello"):
     hex `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`,
@@ -338,6 +338,8 @@ paths:
                 title: Conflict
                 status: 409
                 detail: "Object 'document.pdf' already exists in bucket 'my-bucket'"
+        '405':
+          description: Method Not Allowed — server is configured as read-only (object-server only)
         '411':
           description: Length Required — Content-Length header is missing
           content:
