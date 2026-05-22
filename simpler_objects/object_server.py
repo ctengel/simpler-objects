@@ -204,8 +204,15 @@ def list_buckets():
     """List buckets — not permitted"""
     raise HTTPException(status_code=403)
 
-# TODO lightweight head
-@app.api_route("/{bucket}/", methods=['GET', 'HEAD'])
+@app.head("/{bucket}/")
+def head_bucket(bucket: str):
+    dir_path = safe_path(pathlib.Path(OBJECT_DIRECTORY), bucket)
+    if not dir_path.is_dir():
+        raise HTTPException(status_code=404)
+    return Response(status_code=200)
+
+
+@app.get("/{bucket}/")
 def list_directory(bucket: str):
     """List objects in bucket"""
     dir_path = safe_path(pathlib.Path(OBJECT_DIRECTORY), bucket)
