@@ -5,19 +5,16 @@ import warnings
 import random
 import sys
 import httpx
+from simpler_objects.common import filter_write_candidates
 
 TIMEOUT=2048
 
 def find_space(locator, bucket, object_size, current, desired):
     """Find servers with space for replication"""
-    # TODO refactor with locator_api.add_object
     res = httpx.get(locator + 'health', timeout=4)
     res.raise_for_status()
     health = res.json()['servers']
-    candidates = {server: stats['quota-available-bytes'] * stats['percent'] for server, stats in health.items()
-                  if stats['write'] and stats['percent'] > 1
-                  and stats['quota-available-bytes'] > object_size + 1024*1024
-                  and server not in current}
+    candidates = filter_write_candidates(health, object_size, exclude=current)
     for server in list(candidates.keys()):
         try:
             result = httpx.head(server + bucket + "/", timeout=1)

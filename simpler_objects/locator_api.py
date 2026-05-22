@@ -8,6 +8,7 @@ from typing import Annotated
 import httpx
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import RedirectResponse, Response
+from simpler_objects.common import filter_write_candidates
 
 OBJECT_SERVERS = os.environ.get('OBJECT_SERVERS', 'http://localhost:46579/')
 
@@ -103,10 +104,7 @@ async def add_object(bucket: str, key: str, content_length: Annotated[int | None
     exist_results = await exist_fut
 
     health = dict(zip(all_obj_servers, healths))
-    candidates = {server: stats['quota-available-bytes'] * stats['percent']
-                  for server, stats in health.items()
-                  if stats['write'] and stats['percent'] > 1
-                  and stats['quota-available-bytes'] > content_length + 1024*1024}
+    candidates = filter_write_candidates(health, content_length)
     for server, status in exist_results:
         if status is None:
             candidates.pop(server, None)
