@@ -28,7 +28,9 @@ def _health(write=True, available=10 ** 9, percent=50):
 @pytest.fixture()
 def client(monkeypatch):
     monkeypatch.setattr(locator, "OBJECT_SERVERS", f"{SERVER_A},{SERVER_B}")
-    return ValidatingTestClient(locator.app)
+    # Context manager so the lifespan handler runs and sets app.state.client.
+    with ValidatingTestClient(locator.app) as test_client:
+        yield test_client
 
 
 # ---------------------------------------------------------------------------

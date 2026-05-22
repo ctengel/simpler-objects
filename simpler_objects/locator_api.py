@@ -14,15 +14,13 @@ OBJECT_SERVERS = os.environ.get('OBJECT_SERVERS', 'http://localhost:46579/')
 # Fallback Retry-After on a busy 503; matches the object server's own constant.
 RETRY_AFTER = "64"
 
-# One HTTP client shared across all requests, so connections to the object
-# servers are pooled and reused; closed on shutdown by the lifespan handler.
-client = httpx.AsyncClient()
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Close the shared HTTP client when the app shuts down."""
+    """Manage the lifecycle of the shared object-server HTTP client."""
+    # One pooled client for the whole app, reused across all requests.
+    app.state.client = httpx.AsyncClient()
     yield
-    await client.aclose()
+    await app.state.client.aclose()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -35,6 +33,7 @@ def object_servers(randomized=False):
 
 async def get_object_server_health(url: str):
     """Get the health of an object server"""
+    client = app.state.client
     try:
         result = await client.get(url + 'health', timeout=1)
         result.raise_for_status()
@@ -61,6 +60,7 @@ async def find_object(bucket: str, key: str):
     # "retry forever" whenever any node in the fleet is flaky.
     busy = False
     retry_after = None
+    client = app.state.client
     # Sequential by design: randomised order spreads load; first healthy server wins.
     for server in object_servers(randomized=True):
         try:
@@ -85,6 +85,7 @@ async def add_object(bucket: str, key: str, content_length: Annotated[int | None
     object_path = f"{bucket}/{key}"
     # TODO use caches of objects and servers but then double check vs checking everybody
     all_obj_servers = object_servers()
+    client = app.state.client
 
     async def check_exists(server):
         try:
@@ -140,6 +141,8 @@ def list_buckets():
 @app.head("/{bucket}/")
 async def head_bucket(bucket: str):
     """Check if a bucket exists on any server"""
+    client = app.state.client
+
     async def check_server(server):
         try:
             result = await client.head(server + bucket + "/", timeout=2)
@@ -161,6 +164,8 @@ async def head_bucket(bucket: str):
 @app.get("/{bucket}/")
 async def list_bucket(bucket: str):
     """List all items in a bucket"""
+    client = app.state.client
+
     async def fetch_server(server):
         try:
             result = await client.get(server + bucket + '/', timeout=2)
