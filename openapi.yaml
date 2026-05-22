@@ -182,6 +182,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+        '503':
+          description: >
+            Object temporarily unavailable — a PUT of this key is in progress
+            (object-server only). Retry after the delay in the `Retry-After`
+            header.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Suggested retry delay in seconds
+              example: 64
     head:
       tags:
         - Objects
@@ -239,6 +250,17 @@ paths:
                 $ref: '#/components/schemas/ProblemDetail'
         '422':
           description: Validation Error
+        '503':
+          description: >
+            Object temporarily unavailable — a PUT of this key is in progress
+            (object-server only). Retry after the delay in the `Retry-After`
+            header.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Suggested retry delay in seconds
+              example: 64
     put:
       tags:
         - Objects
@@ -328,7 +350,9 @@ paths:
                 status: 400
                 detail: Uploaded content does not match the provided Content-Digest header
         '409':
-          description: Object already exists
+          description: >
+            Object already exists, or a PUT of the same key is currently in
+            progress (object-server only). Keys are immutable once written.
           content:
             application/problem+json:
               schema:

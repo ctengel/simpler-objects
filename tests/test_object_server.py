@@ -1,7 +1,9 @@
 """Phase 1 tests — Repr-Digest, Content-Digest, and Content-Type headers."""
 
 import base64
+import fcntl
 import hashlib
+import os
 import pytest
 
 import simpler_objects.object_server as server
@@ -108,3 +110,37 @@ def test_mime_type(client, filename, expected_mime):
     client.put(f"/{BUCKET}/{filename}", content=b"test")
     resp = client.get(f"/{BUCKET}/{filename}")
     assert resp.headers["Content-Type"].split(";")[0] == expected_mime
+
+
+def test_put_existing_key_conflict(uploaded):
+    """PUT to a key that already exists returns 409 (O_EXCL)."""
+    resp = uploaded.put(f"/{BUCKET}/{TEST_FILE}", content=TEST_CONTENT)
+    assert resp.status_code == 409
+
+
+def test_get_missing_object(client):
+    """GET of a key that was never stored returns 404."""
+    resp = client.get(f"/{BUCKET}/never-stored.bin")
+    assert resp.status_code == 404
+
+
+def test_get_locked_object_returns_503(uploaded, tmp_path):
+    """A GET while a PUT holds the exclusive lock returns 503 + Retry-After."""
+    fd = os.open(tmp_path / BUCKET / TEST_FILE, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        resp = uploaded.get(f"/{BUCKET}/{TEST_FILE}")
+        assert resp.status_code == 503
+        assert resp.headers["Retry-After"] == "64"
+    finally:
+        os.close(fd)
+
+
+def test_get_skips_malformed_checksum_line(uploaded, tmp_path):
+    """A torn line in the bucket checksum file does not break GET."""
+    cksum_file = tmp_path / f"{BUCKET}.sha256"
+    cksum_file.write_text("corrupt-single-field\n" + cksum_file.read_text())
+    resp = uploaded.get(f"/{BUCKET}/{TEST_FILE}")
+    assert resp.status_code == 200
+    assert resp.content == TEST_CONTENT
+    assert resp.headers["Repr-Digest"] == _expected_digest(TEST_CONTENT)

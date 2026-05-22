@@ -4,6 +4,7 @@ import pathlib
 import shutil
 import base64
 import hashlib
+import fcntl
 import os
 from typing import Annotated
 from fastapi import FastAPI, HTTPException, Header, Request
@@ -14,6 +15,7 @@ app = FastAPI()
 OBJECT_DIRECTORY = os.environ.get('OBJECT_DIRECTORY', '.')
 READ_ONLY = bool(os.environ.get('READ_ONLY', ''))
 BUFFER = 67108864
+RETRY_AFTER = "64"
 
 def checksum_filename(bucket: pathlib.Path):
     """Determine a bucket checksum file"""
@@ -64,6 +66,40 @@ def file_checksum(path):
             hash_sha256.update(chunk)
     return hash_sha256.digest()
 
+def append_checksum(path: pathlib.Path, file_digest: bytes):
+    """Durably append a sha256sum-format line for an object to its bucket checksum file.
+
+    The single O_APPEND os.write() is atomic against concurrent appenders (POSIX),
+    so different-key PUTs in the same bucket need no extra serialisation.
+    """
+    cksum_line = f"{file_digest.hex()}  {path.name}\n"
+    fd = os.open(checksum_filename(path.parent),
+                 os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, cksum_line.encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+def read_checksum(bucket_dir: pathlib.Path, key: str):
+    """Return the recorded SHA-256 digest for a key, or None.
+
+    Lines that do not split into exactly two fields (e.g. torn by a pre-atomic
+    crash) are skipped rather than raising.
+    """
+    try:
+        with open(checksum_filename(bucket_dir), encoding='utf-8') as fp:
+            for line in fp:
+                parts = line.strip().split()
+                if len(parts) != 2:
+                    continue
+                checksum, file_name = parts
+                if file_name == key:
+                    return bytes.fromhex(checksum)
+    except FileNotFoundError:
+        pass
+    return None
+
 @app.get('/health')
 def healthcheck():
     """Return basic info on node health"""
@@ -79,18 +115,25 @@ def healthcheck():
 async def get_object(bucket: str, key: str):
     """Handle GET requests"""
     path = object_filename(bucket, key)
-    if not path.is_file():
-        raise HTTPException(status_code=404)
-    my_cksum = None
     try:
-        with open(checksum_filename(path.parent), encoding='utf-8') as fp:
-            for line in fp:
-                checksum, file_name = line.strip().split()
-                if file_name == key:
-                    my_cksum = bytes.fromhex(checksum)
-                    break
+        fd = os.open(path, os.O_RDONLY)
     except FileNotFoundError:
-        pass
+        raise HTTPException(status_code=404) from None
+    try:
+        # A shared lock, tested non-blocking: if a PUT holds the exclusive
+        # lock the object is mid-upload — fail fast and retriable.
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise HTTPException(status_code=503,
+                                headers={"Retry-After": RETRY_AFTER}) from None
+        # Re-check: a PUT that failed may have unlinked the file between the
+        # open above and acquiring the lock.
+        if not path.is_file():
+            raise HTTPException(status_code=404)
+        my_cksum = read_checksum(path.parent, key)
+    finally:
+        os.close(fd)
     headers = None
     if my_cksum:
         headers = {"Repr-Digest": http_digest_head(my_cksum)}
@@ -102,38 +145,42 @@ async def put_object(bucket: str, key: str, request: Request,
     if READ_ONLY:
         raise HTTPException(status_code=405)
 
-    # ensure unique filename
     path = object_filename(bucket, key)
-    if path.exists():
-        raise HTTPException(status_code=409)
 
-    # parse Digest
-    request_digest = parse_digest_headers(request.headers)
+    # O_EXCL creates the object atomically: an existing key — or a racing
+    # same-key PUT that won the create — lands here as 409.
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        raise HTTPException(status_code=409) from None
+    except (FileNotFoundError, NotADirectoryError):
+        raise HTTPException(status_code=404) from None
 
-    # Receive file
-    with open(path, "wb") as dst:
-        # TODO async? check length? lock?
-        async for chunk in request.stream():
-            dst.write(chunk)
-    if content_length is not None and path.stat().st_size != content_length:
-        path.unlink()
-        raise HTTPException(status_code=400)
-
-    # Hash and compare
-    file_digest = file_checksum(path)
-    if request_digest and file_digest != request_digest:
-        path.unlink()
-        raise HTTPException(status_code=400)
-
-    # write hash to disk
-    hash_file = checksum_filename(path.parent)
-    cksum_line = f"{file_digest.hex()}  {path.name}\n"
-    with open(hash_file, 'a', encoding='utf-8') as hf:
-        hf.write(cksum_line)
-
-    # send response
-    return Response(status_code=201, content=None,
-                    headers={"Repr-Digest": http_digest_head(file_digest)})
+    try:
+        # Hold an exclusive lock for the whole upload so a concurrent GET
+        # fails fast with 503 rather than reading a partial file.
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            request_digest = parse_digest_headers(request.headers)
+            with os.fdopen(fd, "wb", closefd=False) as dst:
+                async for chunk in request.stream():
+                    dst.write(chunk)
+            os.fsync(fd)
+            if content_length is not None and os.fstat(fd).st_size != content_length:
+                raise HTTPException(status_code=400)
+            file_digest = file_checksum(path)
+            if request_digest and file_digest != request_digest:
+                raise HTTPException(status_code=400)
+            append_checksum(path, file_digest)
+            return Response(status_code=201, content=None,
+                            headers={"Repr-Digest": http_digest_head(file_digest)})
+        except BaseException:
+            # Any non-crash failure (client disconnect, cancellation, bad
+            # length/digest) must leave no partial object behind.
+            path.unlink(missing_ok=True)
+            raise
+    finally:
+        os.close(fd)
 
 @app.get("/")
 def list_buckets():
@@ -153,7 +200,10 @@ def list_directory(bucket: str):
     try:
         with open(checksum_filename(dir_path), encoding='utf-8') as fp:
             for line in fp:
-                checksum, file_name = line.strip().split()
+                parts = line.strip().split()
+                if len(parts) != 2:
+                    continue
+                checksum, file_name = parts
                 hashes[file_name] = checksum
     except FileNotFoundError:
         pass
