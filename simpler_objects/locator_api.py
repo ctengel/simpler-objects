@@ -12,6 +12,9 @@ app = FastAPI()
 
 OBJECT_SERVERS = os.environ.get('OBJECT_SERVERS', 'http://localhost:46579/')
 
+# Fallback Retry-After on a busy 503; matches the object server's own constant.
+RETRY_AFTER = "64"
+
 def object_servers(randomized=False):
     """Return a randomized list of object server URLs"""
     servers = OBJECT_SERVERS.split(',')
@@ -40,15 +43,29 @@ async def healthcheck():
 async def find_object(bucket: str, key: str):
     """Return a redirect to an existing object"""
     object_path = f"{bucket}/{key}"
+    # Only an explicit 503 from a reachable server is evidence the object
+    # exists (a PUT is in progress); a timeout or transport error is the
+    # absence of an answer, not proof, so it must not escalate to 503 — unlike
+    # head_bucket, which answers a coarser question and may treat any error as
+    # 503. Escalating every transport failure would mask genuine 404s as
+    # "retry forever" whenever any node in the fleet is flaky.
+    busy = False
+    retry_after = None
     # Sequential by design: randomised order spreads load; first healthy server wins.
     async with httpx.AsyncClient() as client:
         for server in object_servers(randomized=True):
             try:
                 result = await client.head(server + object_path, timeout=1)
-                result.raise_for_status()
             except httpx.HTTPError:
                 continue
-            return RedirectResponse(url=server+object_path)
+            if result.status_code == 200:
+                return RedirectResponse(url=server + object_path)
+            if result.status_code == 503:
+                busy = True
+                retry_after = result.headers.get("Retry-After", retry_after)
+    if busy:
+        raise HTTPException(status_code=503,
+                            headers={"Retry-After": retry_after or RETRY_AFTER})
     raise HTTPException(status_code=404)
 
 @app.put("/{bucket}/{key}")

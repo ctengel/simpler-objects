@@ -1,5 +1,6 @@
 """Simpler Objects Server"""
 
+import asyncio
 import errno
 import pathlib
 import shutil
@@ -113,8 +114,13 @@ def healthcheck():
     return r
 
 @app.api_route("/{bucket}/{key}", methods=['GET', 'HEAD'])
-async def get_object(bucket: str, key: str):
-    """Handle GET requests"""
+def get_object(bucket: str, key: str):
+    """Handle GET requests.
+
+    A sync route: every operation here is a blocking syscall with nothing to
+    await, so FastAPI runs it in the worker threadpool and the event loop is
+    never stalled. The returned FileResponse is still streamed asynchronously.
+    """
     path = object_filename(bucket, key)
     try:
         fd = os.open(path, os.O_RDONLY)
@@ -166,10 +172,12 @@ async def put_object(bucket: str, key: str, request: Request,
             with os.fdopen(fd, "wb", closefd=False) as dst:
                 async for chunk in request.stream():
                     dst.write(chunk)
-            os.fsync(fd)
+            # Offload the blocking commit steps (fsync, whole-file hash) so a
+            # large upload does not stall the event loop for other requests.
+            await asyncio.to_thread(os.fsync, fd)
             if content_length is not None and os.fstat(fd).st_size != content_length:
                 raise HTTPException(status_code=400)
-            file_digest = file_checksum(path)
+            file_digest = await asyncio.to_thread(file_checksum, path)
             if request_digest and file_digest != request_digest:
                 raise HTTPException(status_code=400)
             append_checksum(path, file_digest)

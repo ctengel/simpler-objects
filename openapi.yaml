@@ -184,9 +184,10 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
         '503':
           description: >
-            Object temporarily unavailable — a PUT of this key is in progress
-            (object-server only). Retry after the delay in the `Retry-After`
-            header.
+            Object temporarily unavailable. From an object server, a PUT of
+            this key is in progress. From the locator, no replica could be
+            reached cleanly — at least one holds the object but is mid-upload.
+            Retry after the delay in the `Retry-After` header.
           headers:
             Retry-After:
               schema:
@@ -252,9 +253,10 @@ paths:
           description: Validation Error
         '503':
           description: >
-            Object temporarily unavailable — a PUT of this key is in progress
-            (object-server only). Retry after the delay in the `Retry-After`
-            header.
+            Object temporarily unavailable. From an object server, a PUT of
+            this key is in progress. From the locator, no replica could be
+            reached cleanly — at least one holds the object but is mid-upload.
+            Retry after the delay in the `Retry-After` header.
           headers:
             Retry-After:
               schema:

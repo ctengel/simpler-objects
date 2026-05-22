@@ -95,6 +95,63 @@ def test_find_object_head_method(client):
     assert resp.status_code == 307
 
 
+@respx.mock
+def test_find_object_busy_returns_503(client):
+    """An explicit 503 (object mid-upload) must propagate, not become a 404."""
+    respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(503))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    resp = client.get(f"/{OBJ_PATH}", follow_redirects=False)
+    assert resp.status_code == 503
+    assert "Retry-After" in resp.headers
+
+
+@respx.mock
+def test_find_object_retry_after_forwarded(client):
+    """The upstream Retry-After is echoed on the locator's 503."""
+    respx.head(SERVER_A + OBJ_PATH).mock(
+        return_value=httpx.Response(503, headers={"Retry-After": "64"}))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    resp = client.get(f"/{OBJ_PATH}", follow_redirects=False)
+    assert resp.status_code == 503
+    assert resp.headers["Retry-After"] == "64"
+
+
+@respx.mock
+def test_find_object_timeout_is_not_found(client):
+    """A timeout is the absence of an answer, not evidence the object exists."""
+    respx.head(SERVER_A + OBJ_PATH).mock(side_effect=httpx.ReadTimeout("slow"))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    resp = client.get(f"/{OBJ_PATH}", follow_redirects=False)
+    assert resp.status_code == 404
+
+
+@respx.mock
+def test_find_object_unreachable_is_not_found(client):
+    """An unreachable server does not turn a genuine 404 into a 503."""
+    respx.head(SERVER_A + OBJ_PATH).mock(side_effect=httpx.ConnectError("down"))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    resp = client.get(f"/{OBJ_PATH}", follow_redirects=False)
+    assert resp.status_code == 404
+
+
+@respx.mock
+def test_find_object_busy_beats_unreachable(client):
+    """An explicit 503 wins over a server that simply could not be reached."""
+    respx.head(SERVER_A + OBJ_PATH).mock(side_effect=httpx.ConnectError("down"))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(503))
+    resp = client.get(f"/{OBJ_PATH}", follow_redirects=False)
+    assert resp.status_code == 503
+
+
+@respx.mock
+def test_find_object_busy_then_found(client):
+    """A live replica still wins even when another replica is mid-upload."""
+    respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(503))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(200))
+    resp = client.get(f"/{OBJ_PATH}", follow_redirects=False)
+    assert resp.status_code == 307
+
+
 # ---------------------------------------------------------------------------
 # PUT /{bucket}/{key}
 # ---------------------------------------------------------------------------
