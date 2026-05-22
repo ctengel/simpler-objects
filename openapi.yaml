@@ -376,7 +376,9 @@ paths:
                 status: 411
                 detail: Content-Length header is required for PUT requests
         '507':
-          description: Insufficient storage
+          description: >
+            Insufficient storage — no server has enough free space to accept this object
+            (locator), or the disk filled up during write (object-server).
           content:
             application/problem+json:
               schema:
@@ -385,7 +387,7 @@ paths:
                 type: about:blank
                 title: Insufficient Storage
                 status: 507
-                detail: No server has sufficient free space for this object
+                detail: No space available for this object
         '422':
           description: Validation Error
           content:

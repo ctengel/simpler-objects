@@ -1,5 +1,6 @@
 """Simpler Objects Server"""
 
+import errno
 import pathlib
 import shutil
 import base64
@@ -26,7 +27,7 @@ def safe_path(base: pathlib.Path, *parts) -> pathlib.Path:
     resolved_base = base.resolve()
     candidate = base.joinpath(*parts).resolve()
     if not candidate.is_relative_to(resolved_base):
-        raise HTTPException(status_code=400)
+        raise HTTPException(status_code=404)
     return candidate
 
 def object_filename(bucket, key):
@@ -174,6 +175,11 @@ async def put_object(bucket: str, key: str, request: Request,
             append_checksum(path, file_digest)
             return Response(status_code=201, content=None,
                             headers={"Repr-Digest": http_digest_head(file_digest)})
+        except OSError as e:
+            path.unlink(missing_ok=True)
+            if e.errno == errno.ENOSPC:
+                raise HTTPException(status_code=507) from None
+            raise
         except BaseException:
             # Any non-crash failure (client disconnect, cancellation, bad
             # length/digest) must leave no partial object behind.

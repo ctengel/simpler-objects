@@ -1,6 +1,7 @@
 """Phase 1 tests — Repr-Digest, Content-Digest, and Content-Type headers."""
 
 import base64
+import errno as errno_mod
 import fcntl
 import hashlib
 import os
@@ -134,6 +135,25 @@ def test_get_locked_object_returns_503(uploaded, tmp_path):
         assert resp.headers["Retry-After"] == "64"
     finally:
         os.close(fd)
+
+
+def test_put_no_space_returns_507(client, tmp_path, monkeypatch):
+    """PUT returns 507 and leaves no partial file when disk is full."""
+    def fsync_enospc(fd):
+        raise OSError(errno_mod.ENOSPC, "No space left on device")
+    monkeypatch.setattr(os, "fsync", fsync_enospc)
+    resp = client.put(f"/{BUCKET}/{TEST_FILE}", content=TEST_CONTENT)
+    assert resp.status_code == 507
+    assert not (tmp_path / BUCKET / TEST_FILE).exists()
+
+
+def test_path_traversal_returns_404(tmp_path, monkeypatch):
+    """safe_path raises 404 for path traversal attempts."""
+    from fastapi import HTTPException
+    monkeypatch.setattr(server, "OBJECT_DIRECTORY", str(tmp_path))
+    with pytest.raises(HTTPException) as exc_info:
+        server.safe_path(tmp_path, "..", "etc", "passwd")
+    assert exc_info.value.status_code == 404
 
 
 def test_get_skips_malformed_checksum_line(uploaded, tmp_path):
