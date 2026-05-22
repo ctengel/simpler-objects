@@ -1,4 +1,14 @@
-"""Tests for locator_api.py — all object-server calls are mocked with respx."""
+"""Tests for locator_api.py — all object-server calls are mocked with respx.
+
+Every test that exercises a redirect-returning endpoint passes
+``follow_redirects=False``. This is required, not optional: Starlette's
+TestClient dispatches every request to the wrapped ASGI app regardless of the
+URL host, so a followed 307 (whose Location points at an object server) is
+routed straight back into the locator app — which 307s again, looping until
+httpx raises TooManyRedirects. That loop is an artifact of the in-process test
+transport, not a production bug; a real client follows the redirect once to a
+genuinely different host. Assert the 307 and its Location directly instead.
+"""
 
 import httpx
 import pytest
@@ -225,6 +235,27 @@ def test_add_object_bucket_missing(client):
     respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(404))
     respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
     respx.head(SERVER_A + BUCKET + "/").mock(return_value=httpx.Response(404))
+    respx.head(SERVER_B + BUCKET + "/").mock(return_value=httpx.Response(404))
+    resp = client.put(f"/{OBJ_PATH}", headers={"Content-Length": "100"}, follow_redirects=False)
+    assert resp.status_code == 507
+
+
+@respx.mock
+def test_add_object_bucket_probe_redirect_excluded(client):
+    """A bucket probe answering 307 must not count as "bucket exists" (#39).
+
+    httpx's raise_for_status() rejects any 3xx, so check_bucket drops the
+    server (this is the behaviour the requests->httpx migration brought, and
+    the real fix for #39). With the bucket on no server the only correct
+    answer is 507 — a recurrence that read the 307 as "exists" would instead
+    307 the PUT to SERVER_A.
+    """
+    respx.get(SERVER_A + "health").mock(return_value=httpx.Response(200, json=_health()))
+    respx.get(SERVER_B + "health").mock(return_value=httpx.Response(200, json=_health()))
+    respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(404))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    respx.head(SERVER_A + BUCKET + "/").mock(
+        return_value=httpx.Response(307, headers={"Location": SERVER_A + "elsewhere/"}))
     respx.head(SERVER_B + BUCKET + "/").mock(return_value=httpx.Response(404))
     resp = client.put(f"/{OBJ_PATH}", headers={"Content-Length": "100"}, follow_redirects=False)
     assert resp.status_code == 507

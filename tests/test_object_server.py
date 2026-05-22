@@ -7,6 +7,8 @@ import hashlib
 import os
 import pytest
 
+from fastapi.testclient import TestClient
+
 import simpler_objects.object_server as server
 from tests.openapi_validation import ValidatingTestClient
 
@@ -69,6 +71,32 @@ def test_head(uploaded):
     assert "Content-Type" in resp.headers
     expected = _expected_digest(TEST_CONTENT)
     assert resp.headers["Repr-Digest"] == expected
+
+
+def test_head_bucket_exists(client):
+    """HEAD /{bucket}/ on an existing bucket returns 200."""
+    resp = client.head(f"/{BUCKET}/")
+    assert resp.status_code == 200
+
+
+def test_head_bucket_missing(client):
+    """HEAD /{bucket}/ on a missing bucket returns 404."""
+    resp = client.head("/no-such-bucket/")
+    assert resp.status_code == 404
+
+
+def test_bucket_no_slash_redirects():
+    """HEAD /{bucket} (no trailing slash) returns a 307 to /{bucket}/.
+
+    External clients may rely on this Starlette redirect_slashes behaviour, so
+    it is locked in here. A plain TestClient is used because /{bucket} is
+    intentionally undocumented and ValidatingTestClient asserts a matching
+    openapi.yaml path template exists.
+    """
+    plain = TestClient(server.app)
+    resp = plain.head(f"/{BUCKET}", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"].endswith(f"/{BUCKET}/")
 
 
 @pytest.fixture()
