@@ -51,6 +51,12 @@ Run an asynchronous replication periodically:
 python -m simpler_objects.async_replicate http://localhost:29164/ bucket 2
 ```
 
+## On-disk format
+
+The object server keeps all state as plain files: each bucket is a directory of object files, with a sibling `<bucket>.sha256` checksum file in standard `sha256sum` format. There is no database or index.
+
+On-disk-format simplicity is a deliberate design goal. The format is changed only when genuinely necessary, and any change is kept backwards-compatible — existing bucket directories and checksum files keep working without migration. This is why legacy files can be dropped straight into a bucket directory and "just work" (see Validation, below).
+
 ## Validation
 
 ```
