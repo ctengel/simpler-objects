@@ -1,0 +1,13 @@
+[Unit]
+Description=Run async replication for bucket %i hourly
+Documentation=https://github.com/ctengel/simpler-objects
+
+[Timer]
+# Edit the cadence per-bucket via `systemctl edit simpler-objects-async-replicate@<bucket>.timer`.
+OnCalendar=hourly
+RandomizedDelaySec=10min
+Persistent=true
+Unit=simpler-objects-async-replicate@%i.service
+
+[Install]
+WantedBy=timers.target

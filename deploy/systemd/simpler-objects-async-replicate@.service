@@ -1,0 +1,40 @@
+[Unit]
+Description=Replicate bucket %i in simpler-objects
+Documentation=https://github.com/ctengel/simpler-objects
+After=network-online.target
+Wants=network-online.target
+# If you run the locator on the same host and want to wait for it, add via
+# `systemctl edit simpler-objects-async-replicate@%i`:
+#   [Unit]
+#   After=simpler-objects-locator.service
+#   Wants=simpler-objects-locator.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/simpler-objects/async-replicate.env
+# Optional per-bucket override; the leading `-` makes it non-fatal if missing.
+EnvironmentFile=-/etc/simpler-objects/async-replicate-%i.env
+User=simpler-objects
+Group=simpler-objects
+
+# Defaults; values in either env file override these.
+Environment=LOCATOR_URL=http://localhost:29164/
+Environment=REPLICAS=2
+
+# Adjust the venv path to wherever you installed the package.
+ExecStart=/opt/simpler-objects/venv/bin/simpler-objects-async-replicate ${LOCATOR_URL} %i ${REPLICAS}
+
+# Sandboxing (no ReadWritePaths — the replicator streams server-to-server)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true

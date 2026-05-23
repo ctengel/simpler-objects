@@ -1,0 +1,24 @@
+#!/bin/sh
+# Thin wrapper for cron entries that prefer env-var-driven invocations over
+# baking the locator URL and replica count into the cron line itself.
+#
+# Place this at /usr/local/sbin/simpler-objects-async-replicate.sh (root:root,
+# mode 0755) and set LOCATOR_URL / REPLICAS in /etc/default/simpler-objects
+# (or any file your cron sources before running).
+#
+# Usage in cron:
+#   17 * * * * simpler-objects /usr/local/sbin/simpler-objects-async-replicate.sh photos
+#   23 3 * * * simpler-objects /usr/local/sbin/simpler-objects-async-replicate.sh backups 3
+#
+# Positional args:
+#   $1  bucket name (required)
+#   $2  replica count (optional; falls back to $REPLICAS, then 2)
+
+set -eu
+
+BUCKET="${1:?usage: $0 <bucket> [replicas]}"
+REPLICAS="${2:-${REPLICAS:-2}}"
+LOCATOR_URL="${LOCATOR_URL:-http://localhost:29164/}"
+
+exec /opt/simpler-objects/venv/bin/simpler-objects-async-replicate \
+    "$LOCATOR_URL" "$BUCKET" "$REPLICAS"

@@ -141,6 +141,58 @@ Set `OBJECT_SERVERS=` in the env file to the comma-separated list of object serv
 
 The shipped unit runs as the `simpler-objects` user for install-time consistency with the object server. The locator is stateless and could equally run with `DynamicUser=yes`; flip it via a drop-in if you prefer.
 
+## Scheduled replication
+
+`simpler-objects-async-replicate@.service` (templated per bucket) and the paired `simpler-objects-async-replicate@.timer` run `async_replicate` periodically. Each bucket gets its own timer instance, so replica policies are independent.
+
+### Install the base env file and units
+
+```
+sudo install -d -m 0750 -o root -g simpler-objects /etc/simpler-objects
+sudo install -m 0640 -o root -g simpler-objects \
+    deploy/systemd/env/async-replicate.env.example \
+    /etc/simpler-objects/async-replicate.env
+sudoedit /etc/simpler-objects/async-replicate.env   # set LOCATOR_URL, REPLICAS
+
+sudo install -m 0644 deploy/systemd/simpler-objects-async-replicate@.service \
+    deploy/systemd/simpler-objects-async-replicate@.timer \
+    /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
+### Enable a timer per bucket
+
+```
+sudo systemctl enable --now simpler-objects-async-replicate@photos.timer
+sudo systemctl enable --now simpler-objects-async-replicate@backups.timer
+systemctl list-timers 'simpler-objects-async-replicate@*'
+```
+
+### Per-bucket overrides
+
+To set a different replica count for one bucket without editing the global env file, drop a per-bucket env file:
+
+```
+echo 'REPLICAS=3' | sudo tee /etc/simpler-objects/async-replicate-backups.env
+sudo chown root:simpler-objects /etc/simpler-objects/async-replicate-backups.env
+sudo chmod 0640 /etc/simpler-objects/async-replicate-backups.env
+```
+
+The service reads `async-replicate.env` first, then `async-replicate-<bucket>.env` if present (`EnvironmentFile=-...` makes the per-bucket file optional). Values in the per-bucket file win.
+
+To change the cadence for one bucket, edit the timer instance: `sudo systemctl edit simpler-objects-async-replicate@backups.timer` and add `[Timer]` / `OnCalendar=daily` (or whatever you want).
+
+### Run once manually
+
+```
+sudo systemctl start simpler-objects-async-replicate@photos.service
+journalctl -u simpler-objects-async-replicate@photos.service -n 50
+```
+
+`simpler-objects-async-replicate` exits non-zero if any object in the bucket couldn't be replicated (out of space, locator unreachable, source unavailable). systemd records the failure but does not retry until the next timer firing — that's the intended behaviour. If you want the locator on the same host as the replicator to come up first, the unit file comments show the drop-in.
+
+For cron-based scheduling instead, see [`../cron/README.md`](../cron/README.md).
+
 ## Operations
 
 - Logs: `journalctl -u simpler-objects-object-server@disk1 -f`, `journalctl -u simpler-objects-locator -f`

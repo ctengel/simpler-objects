@@ -64,10 +64,12 @@ Restart locator with second object server included:
 OBJECT_SERVERS="http://localhost:29171/,http://localhost:29172/" fastapi dev --port 29164 simpler_objects/locator_api.py
 ```
 
-Run an asynchronous replication periodically:
+Run an asynchronous replication once (handy for debugging):
 ```
 python -m simpler_objects.async_replicate http://localhost:29164/ bucket 2
 ```
+
+For periodic scheduling, see [`deploy/systemd/README.md`](deploy/systemd/README.md) (systemd timer, one per bucket) or [`deploy/cron/README.md`](deploy/cron/README.md) (cron equivalent).
 
 ## On-disk format
 
