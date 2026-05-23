@@ -106,9 +106,10 @@ def servers(tmp_path_factory):
     obj_port, loc_port = _free_port(), _free_port()
 
     obj_proc = _spawn("object_server", obj_port,
-                      {"OBJECT_DIRECTORY": str(obj_dir)})
+                      {"OBJECT_DIRECTORY": str(obj_dir), "LOG_LEVEL": "WARNING"})
     loc_proc = _spawn("locator_api", loc_port,
-                      {"OBJECT_SERVERS": f"http://127.0.0.1:{obj_port}/"})
+                      {"OBJECT_SERVERS": f"http://127.0.0.1:{obj_port}/",
+                       "LOG_LEVEL": "WARNING"})
     try:
         if not (_wait_for(f"http://127.0.0.1:{obj_port}/health")
                 and _wait_for(f"http://127.0.0.1:{loc_port}/health")):

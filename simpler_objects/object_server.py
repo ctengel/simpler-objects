@@ -2,6 +2,7 @@
 
 import asyncio
 import errno
+import logging
 import pathlib
 import shutil
 import base64
@@ -12,7 +13,13 @@ from typing import Annotated
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import FileResponse, Response
 
+from simpler_objects.logging_config import configure, install_request_id_middleware
+
+configure()
+logger = logging.getLogger(__name__)
+
 app = FastAPI()
+install_request_id_middleware(app)
 
 OBJECT_DIRECTORY = os.environ.get('OBJECT_DIRECTORY', '.')
 READ_ONLY = bool(os.environ.get('READ_ONLY', ''))
@@ -28,6 +35,11 @@ def safe_path(base: pathlib.Path, *parts) -> pathlib.Path:
     resolved_base = base.resolve()
     candidate = base.joinpath(*parts).resolve()
     if not candidate.is_relative_to(resolved_base):
+        logger.warning("path.traversal", extra={
+            "base": str(resolved_base),
+            "attempted": str(candidate),
+            "parts": [str(p) for p in parts],
+        })
         raise HTTPException(status_code=404)
     return candidate
 
@@ -82,6 +94,11 @@ def append_checksum(path: pathlib.Path, file_digest: bytes):
         os.fsync(fd)
     finally:
         os.close(fd)
+    logger.debug("checksum.append", extra={
+        "bucket": path.parent.name,
+        "key": path.name,
+        "sha256_hex": file_digest.hex(),
+    })
 
 def read_checksum(bucket_dir: pathlib.Path, key: str):
     """Return the recorded SHA-256 digest for a key, or None.
@@ -91,12 +108,18 @@ def read_checksum(bucket_dir: pathlib.Path, key: str):
     """
     try:
         with open(checksum_filename(bucket_dir), encoding='utf-8') as fp:
-            for line in fp:
+            for line_no, line in enumerate(fp, start=1):
                 parts = line.strip().split()
                 # A valid sha256sum line has exactly two fields and a 64-char hex digest.
                 # Fewer/more fields catches truly torn lines; the length check catches a
                 # torn fragment that absorbed a later append (making one garbage field).
                 if len(parts) != 2 or len(parts[0]) != 64:
+                    logger.warning("checksum.torn", extra={
+                        "bucket": bucket_dir.name,
+                        "line_no": line_no,
+                        "field_count": len(parts),
+                        "digest_len": len(parts[0]) if parts else 0,
+                    })
                     continue
                 checksum, file_name = parts
                 if file_name == key:
@@ -128,6 +151,9 @@ def get_object(bucket: str, key: str):
     try:
         fd = os.open(path, os.O_RDONLY)
     except FileNotFoundError:
+        logger.info("object.get.missing", extra={
+            "bucket": bucket, "key": key, "phase": "open",
+        })
         raise HTTPException(status_code=404) from None
     try:
         # A shared lock, tested non-blocking: if a PUT holds the exclusive
@@ -135,11 +161,17 @@ def get_object(bucket: str, key: str):
         try:
             fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError:
+            logger.warning("object.get.busy", extra={
+                "bucket": bucket, "key": key,
+            })
             raise HTTPException(status_code=503,
                                 headers={"Retry-After": RETRY_AFTER}) from None
         # Re-check: a PUT that failed may have unlinked the file between the
         # open above and acquiring the lock.
         if not path.is_file():
+            logger.info("object.get.missing", extra={
+                "bucket": bucket, "key": key, "phase": "post-lock",
+            })
             raise HTTPException(status_code=404)
         my_cksum = read_checksum(path.parent, key)
     finally:
@@ -147,6 +179,12 @@ def get_object(bucket: str, key: str):
     headers = None
     if my_cksum:
         headers = {"Repr-Digest": http_digest_head(my_cksum)}
+    logger.info("object.get", extra={
+        "bucket": bucket,
+        "key": key,
+        "size": path.stat().st_size,
+        "sha256_hex": my_cksum.hex() if my_cksum else None,
+    })
     return FileResponse(path, headers=headers)
 
 @app.put("/{bucket}/{key}")
@@ -162,8 +200,10 @@ async def put_object(bucket: str, key: str, request: Request,
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     except FileExistsError:
+        logger.info("object.put.conflict", extra={"bucket": bucket, "key": key})
         raise HTTPException(status_code=409) from None
     except (FileNotFoundError, NotADirectoryError):
+        logger.info("object.put.no_bucket", extra={"bucket": bucket, "key": key})
         raise HTTPException(status_code=404) from None
 
     try:
@@ -178,22 +218,51 @@ async def put_object(bucket: str, key: str, request: Request,
             # Offload the blocking commit steps (fsync, whole-file hash) so a
             # large upload does not stall the event loop for other requests.
             await asyncio.to_thread(os.fsync, fd)
-            if content_length is not None and os.fstat(fd).st_size != content_length:
+            actual_size = os.fstat(fd).st_size
+            if content_length is not None and actual_size != content_length:
+                logger.warning("object.put.mismatch", extra={
+                    "bucket": bucket, "key": key, "reason": "content_length",
+                    "expected_size": content_length, "actual_size": actual_size,
+                })
                 raise HTTPException(status_code=400)
             file_digest = await asyncio.to_thread(file_checksum, path)
             if request_digest and file_digest != request_digest:
+                logger.warning("object.put.mismatch", extra={
+                    "bucket": bucket, "key": key, "reason": "digest",
+                    "expected_sha256_hex": request_digest.hex(),
+                    "actual_sha256_hex": file_digest.hex(),
+                })
                 raise HTTPException(status_code=400)
             append_checksum(path, file_digest)
+            logger.info("object.put", extra={
+                "bucket": bucket,
+                "key": key,
+                "size": actual_size,
+                "sha256_hex": file_digest.hex(),
+            })
             return Response(status_code=201, content=None,
                             headers={"Repr-Digest": http_digest_head(file_digest)})
         except OSError as e:
             path.unlink(missing_ok=True)
             if e.errno == errno.ENOSPC:
+                logger.error("object.put.nospace", extra={
+                    "bucket": bucket, "key": key, "errno": e.errno,
+                })
                 raise HTTPException(status_code=507) from None
+            logger.error("object.put.crash", exc_info=True,
+                         extra={"bucket": bucket, "key": key})
+            raise
+        except HTTPException:
+            # Mismatch (400) already logged at WARNING above.
+            path.unlink(missing_ok=True)
+            raise
+        except Exception:
+            path.unlink(missing_ok=True)
+            logger.error("object.put.crash", exc_info=True,
+                         extra={"bucket": bucket, "key": key})
             raise
         except BaseException:
-            # Any non-crash failure (client disconnect, cancellation, bad
-            # length/digest) must leave no partial object behind.
+            # CancelledError / client disconnect: clean up quietly.
             path.unlink(missing_ok=True)
             raise
     finally:
@@ -223,9 +292,14 @@ def list_directory(bucket: str):
     hashes = {}
     try:
         with open(checksum_filename(dir_path), encoding='utf-8') as fp:
-            for line in fp:
+            for line_no, line in enumerate(fp, start=1):
                 parts = line.strip().split()
                 if len(parts) != 2:
+                    logger.warning("checksum.torn", extra={
+                        "bucket": bucket,
+                        "line_no": line_no,
+                        "field_count": len(parts),
+                    })
                     continue
                 checksum, file_name = parts
                 hashes[file_name] = checksum

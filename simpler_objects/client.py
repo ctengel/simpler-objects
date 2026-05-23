@@ -11,13 +11,19 @@ import base64
 import datetime
 import hashlib
 import io
+import logging
 import mimetypes
 import pathlib
+import uuid
 
 import pycurl
 
 BLOCK_SIZE = 16 * 1024 * 1024  # 16 MiB streaming chunk
 _DOWNLOAD_BUFFER = 256 * 1024  # libcurl receive buffer size for downloads
+
+# Library logger — silent unless the embedding application configures handlers.
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 class ClientError(Exception):
@@ -107,6 +113,11 @@ def simple_upload(filename, url, file_mime=None, checksum_val=None) -> bytes:
     if checksum_val is None:
         checksum_val = file_checksum(path)
 
+    request_id = uuid.uuid4().hex
+    logger.debug("client.upload.start", extra={
+        "url": url, "file_path": str(path), "file_size": size,
+        "sha256_hex": checksum_val.hex(), "client_request_id": request_id,
+    })
     response_headers: dict = {}
     curl = pycurl.Curl()
     curl.setopt(pycurl.URL, url)
@@ -117,6 +128,7 @@ def simple_upload(filename, url, file_mime=None, checksum_val=None) -> bytes:
         'Expect: 100-continue',
         f'Content-Type: {file_mime}',
         f'Content-Digest: {encode_digest_header(checksum_val)}',
+        f'X-Request-Id: {request_id}',
     ])
     curl.setopt(pycurl.HEADERFUNCTION, _header_collector(response_headers))
     curl.setopt(pycurl.WRITEDATA, io.BytesIO())  # discard the empty 201 body
@@ -125,6 +137,8 @@ def simple_upload(filename, url, file_mime=None, checksum_val=None) -> bytes:
             curl.setopt(pycurl.READDATA, body)
             curl.perform()
         code = curl.getinfo(pycurl.RESPONSE_CODE)
+        redirects = curl.getinfo(pycurl.REDIRECT_COUNT)
+        total_time = curl.getinfo(pycurl.TOTAL_TIME)
     except pycurl.error as exc:
         raise ClientError(f"upload of {url} failed: {exc}") from exc
     finally:
@@ -134,7 +148,18 @@ def simple_upload(filename, url, file_mime=None, checksum_val=None) -> bytes:
         raise ClientError(f"upload of {url} failed: HTTP {code}", status=code)
     server_digest = parse_digest_header(response_headers.get('repr-digest'))
     if server_digest is not None and server_digest != checksum_val:
+        logger.warning("client.upload.digest_mismatch", extra={
+            "url": url, "client_request_id": request_id,
+            "expected_sha256_hex": checksum_val.hex(),
+            "server_sha256_hex": server_digest.hex(),
+        })
         raise ClientError(f"digest mismatch after upload of {url}")
+    logger.info("client.upload.done", extra={
+        "url": url, "file_size": size, "sha256_hex": checksum_val.hex(),
+        "status": code, "redirects": redirects,
+        "total_time_ms": round(total_time * 1000.0, 2),
+        "client_request_id": request_id,
+    })
     return checksum_val
 
 
@@ -147,13 +172,20 @@ def simple_download(url, filename):
     Returns ``(digest, mime, sugg_fname, mtime)``.
     """
     path = pathlib.Path(filename)
+    request_id = uuid.uuid4().hex
+    logger.debug("client.download.start", extra={
+        "url": url, "file_path": str(path), "client_request_id": request_id,
+    })
     response_headers: dict = {}
     digest = hashlib.sha256()
     curl = pycurl.Curl()
     curl.setopt(pycurl.URL, url)
     curl.setopt(pycurl.FOLLOWLOCATION, 1)
     curl.setopt(pycurl.BUFFERSIZE, _DOWNLOAD_BUFFER)
-    curl.setopt(pycurl.HTTPHEADER, ['Want-Content-Digest: sha-256=9'])
+    curl.setopt(pycurl.HTTPHEADER, [
+        'Want-Content-Digest: sha-256=9',
+        f'X-Request-Id: {request_id}',
+    ])
     curl.setopt(pycurl.HEADERFUNCTION, _header_collector(response_headers))
     try:
         with open(path, 'wb') as out:
@@ -163,6 +195,8 @@ def simple_download(url, filename):
             curl.setopt(pycurl.WRITEFUNCTION, _write)
             curl.perform()
         code = curl.getinfo(pycurl.RESPONSE_CODE)
+        redirects = curl.getinfo(pycurl.REDIRECT_COUNT)
+        total_time = curl.getinfo(pycurl.TOTAL_TIME)
     except pycurl.error as exc:
         path.unlink(missing_ok=True)
         raise ClientError(f"download of {url} failed: {exc}") from exc
@@ -177,8 +211,20 @@ def simple_download(url, filename):
     server_digest = parse_digest_header(response_headers.get('repr-digest'))
     if server_digest is not None and server_digest != file_digest:
         path.unlink(missing_ok=True)
+        logger.warning("client.download.digest_mismatch", extra={
+            "url": url, "client_request_id": request_id,
+            "computed_sha256_hex": file_digest.hex(),
+            "server_sha256_hex": server_digest.hex(),
+        })
         raise ClientError(f"digest mismatch after download of {url}")
 
+    logger.info("client.download.done", extra={
+        "url": url, "file_size": path.stat().st_size,
+        "sha256_hex": file_digest.hex(),
+        "status": code, "redirects": redirects,
+        "total_time_ms": round(total_time * 1000.0, 2),
+        "client_request_id": request_id,
+    })
     return (file_digest,
             response_headers.get('content-type'),
             read_content_disposition(response_headers.get('content-disposition')),
