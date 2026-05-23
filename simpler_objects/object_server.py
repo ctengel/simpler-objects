@@ -12,6 +12,8 @@ from typing import Annotated
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import FileResponse, Response
 
+from simpler_objects.common import parse_checksum_line
+
 app = FastAPI()
 
 OBJECT_DIRECTORY = os.environ.get('OBJECT_DIRECTORY', '.')
@@ -92,13 +94,10 @@ def read_checksum(bucket_dir: pathlib.Path, key: str):
     try:
         with open(checksum_filename(bucket_dir), encoding='utf-8') as fp:
             for line in fp:
-                parts = line.strip().split()
-                # A valid sha256sum line has exactly two fields and a 64-char hex digest.
-                # Fewer/more fields catches truly torn lines; the length check catches a
-                # torn fragment that absorbed a later append (making one garbage field).
-                if len(parts) != 2 or len(parts[0]) != 64:
+                parsed = parse_checksum_line(line)
+                if parsed is None:
                     continue
-                checksum, file_name = parts
+                checksum, file_name = parsed
                 if file_name == key:
                     return bytes.fromhex(checksum)
     except FileNotFoundError:
@@ -224,10 +223,10 @@ def list_directory(bucket: str):
     try:
         with open(checksum_filename(dir_path), encoding='utf-8') as fp:
             for line in fp:
-                parts = line.strip().split()
-                if len(parts) != 2:
+                parsed = parse_checksum_line(line)
+                if parsed is None:
                     continue
-                checksum, file_name = parts
+                checksum, file_name = parsed
                 hashes[file_name] = checksum
     except FileNotFoundError:
         pass
