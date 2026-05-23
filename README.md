@@ -98,6 +98,10 @@ Note that ObjectIndex has a legacy way to manage this. Simply move your old file
 - run in screen
 - change `fastapi dev` to `fastapi run` for prod
 
+## Installing as a service
+
+`deploy/systemd/` ships a template object-server unit (one instance per attached disk), a single-instance locator unit, and example env files. The walkthrough in [`deploy/systemd/README.md`](deploy/systemd/README.md) covers Fedora and Raspberry Pi OS — venv install at `/opt/simpler-objects/venv`, mount-path convention at `/srv/simpler-objects/<instance>`, `systemctl enable --now` per instance.
+
 ## Client guidance
 
 ### Redirects (307)
