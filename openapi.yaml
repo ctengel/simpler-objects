@@ -268,10 +268,11 @@ paths:
         - Objects
       summary: Put Object
       description: >
-        Store an object. The request Content-Type is accepted and should be set by the client;
-        it will be returned on subsequent GET requests. Exact Content-Type preservation
-        (returning the original value verbatim) is a future enhancement — current implementations
-        may probe the MIME type from the file extension.
+        Store an object. If the client supplies a `Content-Type` header and the key has a
+        recognizable file extension, the server validates that they are consistent (e.g.,
+        `image/jpeg` for `.jpg`). `application/octet-stream` is always accepted for any
+        extension. A mismatch returns `415 Unsupported Media Type`. GET responses determine
+        Content-Type from the file extension regardless.
 
 
         `Content-Length` is required. The locator uses it to select a server with sufficient
@@ -377,6 +378,21 @@ paths:
                 title: Length Required
                 status: 411
                 detail: Content-Length header is required for PUT requests
+        '415':
+          description: >
+            Unsupported Media Type — the Content-Type header does not match the MIME type
+            implied by the key's file extension (object-server and locator). application/octet-stream
+            is always accepted. If no Content-Type header is sent, or the extension is
+            unrecognized, no validation is performed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+              example:
+                type: about:blank
+                title: Unsupported Media Type
+                status: 415
+                detail: "Content-Type 'text/plain' is inconsistent with the extension of key 'image.jpg'"
         '507':
           description: >
             Insufficient storage — no server has enough free space to accept this object

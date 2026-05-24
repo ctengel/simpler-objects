@@ -261,6 +261,23 @@ def test_add_object_bucket_probe_redirect_excluded(client):
     assert resp.status_code == 507
 
 
+def test_add_object_content_type_mismatch(client):
+    """Locator returns 415 when Content-Type disagrees with the key's extension."""
+    resp = client.put(f"/{BUCKET}/photo.jpg",
+                      headers={"Content-Length": "100", "Content-Type": "text/plain"},
+                      follow_redirects=False)
+    assert resp.status_code == 415
+
+
+def test_add_object_content_type_octet_stream_accepted(client):
+    """application/octet-stream is accepted for any extension, passes the 415 guard."""
+    # No upstream mocks — the request proceeds past 415 and hits 507 (no servers).
+    resp = client.put(f"/{BUCKET}/photo.jpg",
+                      headers={"Content-Length": "100", "Content-Type": "application/octet-stream"},
+                      follow_redirects=False)
+    assert resp.status_code != 415
+
+
 # ---------------------------------------------------------------------------
 # HEAD /{bucket}/
 # ---------------------------------------------------------------------------

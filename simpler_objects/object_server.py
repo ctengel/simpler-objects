@@ -11,6 +11,7 @@ import os
 from typing import Annotated
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import FileResponse, Response
+from simpler_objects.common import check_content_type_extension
 
 app = FastAPI()
 
@@ -154,6 +155,9 @@ async def put_object(bucket: str, key: str, request: Request,
                      content_length: Annotated[int | None, Header()] = None):
     if READ_ONLY:
         raise HTTPException(status_code=405)
+
+    if not check_content_type_extension(key, request.headers.get('content-type')):
+        raise HTTPException(status_code=415)
 
     path = object_filename(bucket, key)
 
