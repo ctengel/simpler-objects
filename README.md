@@ -183,6 +183,27 @@ Clients may send `Content-Digest` or `Repr-Digest` with a SHA-256 value (`sha-25
 - **`/health` response renamed `available` to `quota-available-bytes`** (RFC 4331 alignment) and added a `quota-used-bytes` field. Clients reading the old `available` key will break and must switch to `quota-available-bytes`. This applies to the object server's `/health` body and to each per-server entry under `servers` in the locator's `/health` body.
 - **`GET /`** now returns `403` on both the object server and the locator (previously `404`, as no route existed). Bucket enumeration is intentionally not offered.
 
+## Logging
+
+The object server, locator, and `async_replicate` CLI emit one JSON object per line on stderr. Verbosity is set by the `LOG_LEVEL` environment variable (default `INFO`):
+
+```
+LOG_LEVEL=INFO fastapi run simpler_objects/object_server.py | jq .
+```
+
+Example PUT through the cluster (one client request → one locator log line → one object-server log line):
+
+```json
+{"ts":"2026-05-22T18:04:11Z","level":"INFO","logger":"simpler_objects.locator_api","msg":"locator.put.select","request_id":"6d49ca3e...","bucket":"mybucket","key":"hello","server":"http://127.0.0.1:39172/","content_length":17,"weight":395178651648}
+{"ts":"2026-05-22T18:04:11Z","level":"INFO","logger":"simpler_objects.object_server","msg":"object.put","request_id":"6d49ca3e...","bucket":"mybucket","key":"hello","size":17,"sha256_hex":"dfc8ae33..."}
+```
+
+The shared `request_id` lets you correlate locator + object-server log lines for the same request. The locator generates one per inbound request (or honours an inbound `X-Request-Id` header) and propagates it on every outbound call to an object server. The bundled `simpler_objects.client` library generates its own ID and sends it on the wire so a client-driven upload's locator log line and the object-server log line share an ID.
+
+Third-party HTTP clients that follow the locator's `307` without forwarding `X-Request-Id` will produce two unrelated IDs (one for the locator request, a fresh one for the object-server request). Set the header yourself if cross-hop tracing matters.
+
+For production `fastapi run` / `uvicorn` deployments where uvicorn's default text config would otherwise be reloaded, write the dict returned by `simpler_objects.logging_config.configure()` to a JSON file and pass it via `uvicorn --log-config path.json`.
+
 ## CORS
 
 CORS headers are not configured by default. Web browsers making cross-origin requests will be blocked. To enable browser access from a different origin, add FastAPI's `CORSMiddleware` or place the service behind a reverse proxy that adds the appropriate `Access-Control-Allow-*` headers. Note that `Repr-Digest` is a non-standard response header and would need to be explicitly listed in `Access-Control-Expose-Headers` for JavaScript clients to read it.

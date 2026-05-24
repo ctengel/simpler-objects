@@ -1,11 +1,16 @@
 """Basic simple bucket async replication"""
 
 import argparse
-import warnings
+import logging
 import random
 import sys
 import httpx
 from simpler_objects.common import filter_write_candidates
+from simpler_objects.logging_config import configure
+
+# Explicit name (rather than __name__) so the logger label stays stable when
+# the module is run as __main__ via `python -m simpler_objects.async_replicate`.
+logger = logging.getLogger("simpler_objects.async_replicate")
 
 TIMEOUT=2048
 
@@ -84,7 +89,10 @@ def auto_replica(locator, bucket, replicas):
     error = False
     for name, obj in contents['objects'].items():
         if obj['error'] or not obj['checksum']:
-            warnings.warn(f'Object {name} has an issue.')
+            logger.warning("replicate.skip", extra={
+                "bucket": bucket, "key": name,
+                "reason": "listing_error" if obj['error'] else "missing_checksum",
+            })
             error = True
             continue
         desired = replicas - len(obj['locations'])
@@ -92,17 +100,31 @@ def auto_replica(locator, bucket, replicas):
             continue
         spaces = find_space(locator, bucket, obj['size'], obj['locations'], desired)
         if not spaces:
-            warnings.warn(f'No space to replicate object {name}')
+            logger.warning("replicate.no_space", extra={
+                "bucket": bucket, "key": name,
+                "current_locations": obj['locations'],
+                "desired_extra": desired,
+            })
             error = True
             continue
         if len(spaces) < desired:
-            warnings.warn('Not enough spaces but will still do some...')
+            logger.warning("replicate.partial", extra={
+                "bucket": bucket, "key": name,
+                "got": len(spaces), "wanted": desired,
+            })
             error = True
         for run in spaces:
             src = random.choice(obj['locations']) + bucket + '/' + name
             dst = run +  bucket + '/' + name
-            print(f"{src} => {dst}")
-            assert replicate_object(src, dst) == obj['size']
+            logger.info("replicate.copy", extra={
+                "bucket": bucket, "key": name, "src": src, "dst": dst,
+            })
+            copied = replicate_object(src, dst)
+            assert copied == obj['size']
+            logger.info("replicate.copy.done", extra={
+                "bucket": bucket, "key": name, "src": src, "dst": dst,
+                "size": copied,
+            })
     return not error
 
 
@@ -115,6 +137,7 @@ def cli():
     parser.add_argument("bucket")
     parser.add_argument("replicas", type=int)
     args = parser.parse_args()
+    configure()
     #replicate_bucket(args.source, args.dest)
     sys.exit(int(not auto_replica(args.locator, args.bucket, args.replicas)))
 
