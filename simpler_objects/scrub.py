@@ -15,7 +15,7 @@ import sys
 import time
 from typing import Iterable, List, Optional, Set
 
-from simpler_objects.common import parse_checksum_line
+from simpler_objects.common import ChecksumFile, parse_checksum_line
 
 
 @dataclasses.dataclass
@@ -31,9 +31,6 @@ class BucketReport:
         return bool(self.garbled_lines or self.stale_entries or self.crash_victims)
 
 
-def _checksum_path(bucket_dir: pathlib.Path) -> pathlib.Path:
-    return bucket_dir.parent / f"{bucket_dir.name}.sha256"
-
 
 def scan_bucket(bucket_dir: pathlib.Path,
                 max_age: Optional[float] = None,
@@ -47,7 +44,7 @@ def scan_bucket(bucket_dir: pathlib.Path,
     """
     report = BucketReport(name=bucket_dir.name)
     valid_keys: Set[str] = set()
-    cksum_path = _checksum_path(bucket_dir)
+    cksum_path = ChecksumFile(bucket_dir).path
     if cksum_path.is_file():
         with open(cksum_path, encoding='utf-8') as fp:
             for line in fp:
@@ -94,26 +91,21 @@ def _rewrite_checksum_file(bucket_dir: pathlib.Path,
 
     Assumes the object server is stopped — no concurrent append protection.
     """
-    cksum_path = _checksum_path(bucket_dir)
-    if not cksum_path.is_file():
+    cksum = ChecksumFile(bucket_dir)
+    if not cksum.path.is_file():
         return
-    tmp_path = cksum_path.with_name(f"{cksum_path.name}.new")
+    tmp_path = cksum.path.with_name(f"{cksum.path.name}.new")
     fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8', closefd=False) as out:
-            with open(cksum_path, encoding='utf-8') as src:
-                for line in src:
-                    parsed = parse_checksum_line(line)
-                    if parsed is None:
-                        continue
-                    if parsed[1] not in keep_filenames:
-                        continue
-                    out.write(f"{parsed[0]}  {parsed[1]}\n")
+            for digest, filename in cksum:
+                if filename in keep_filenames:
+                    out.write(f"{digest}  {filename}\n")
             out.flush()
         os.fsync(fd)
     finally:
         os.close(fd)
-    os.replace(tmp_path, cksum_path)
+    os.replace(tmp_path, cksum.path)
 
 
 def _format_mtime(ts: float) -> str:
@@ -176,9 +168,9 @@ def scrub_directory(root: pathlib.Path,
                        if entry.is_file() and not entry.is_symlink()}
             try:
                 _rewrite_checksum_file(bucket_dir, on_disk)
-                print(f"  repaired: {_checksum_path(bucket_dir)}")
+                print(f"  repaired: {ChecksumFile(bucket_dir).path}")
             except OSError as e:
-                print(f"  failed to repair {_checksum_path(bucket_dir)}: {e}",
+                print(f"  failed to repair {ChecksumFile(bucket_dir).path}: {e}",
                       file=sys.stderr)
                 any_unhandled = True
         elif report.garbled_lines or report.stale_entries:

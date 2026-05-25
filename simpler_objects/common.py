@@ -1,5 +1,7 @@
 """Shared utilities for locator and replication modules."""
 
+import os
+import pathlib
 import string
 
 
@@ -34,3 +36,50 @@ def parse_checksum_line(line: str):
     if not all(c in _HEX_CHARS for c in digest):
         return None
     return digest, filename
+
+
+def iter_checksum_file(path: pathlib.Path):
+    """Yield (digest, filename) for every valid line; silently handle missing file."""
+    try:
+        with open(path, encoding='utf-8') as fp:
+            for line in fp:
+                parsed = parse_checksum_line(line)
+                if parsed is not None:
+                    yield parsed
+    except FileNotFoundError:
+        pass
+
+
+class ChecksumFile:
+    """Handle for a bucket's <name>.sha256 file."""
+
+    def __init__(self, bucket_dir: pathlib.Path):
+        self.path = bucket_dir.parent / f"{bucket_dir.name}.sha256"
+
+    def __iter__(self):
+        return iter_checksum_file(self.path)
+
+    def lookup(self, key: str):
+        """Return bytes digest for key, or None."""
+        for digest, filename in self:
+            if filename == key:
+                return bytes.fromhex(digest)
+        return None
+
+    def as_dict(self) -> dict:
+        """Return {filename: digest_hex} for all valid entries."""
+        return {filename: digest for digest, filename in self}
+
+    def append(self, key: str, digest: bytes) -> None:
+        """Durably append a sha256sum-format line for key.
+
+        The single O_APPEND os.write() is atomic against concurrent appenders (POSIX),
+        so different-key PUTs in the same bucket need no extra serialisation.
+        """
+        cksum_line = f"{digest.hex()}  {key}\n"
+        fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, cksum_line.encode())
+            os.fsync(fd)
+        finally:
+            os.close(fd)
