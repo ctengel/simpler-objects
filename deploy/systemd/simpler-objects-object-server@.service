@@ -21,6 +21,11 @@ Environment=HOST=0.0.0.0
 Environment=PORT=29171
 Environment=WORKERS=1
 
+# Refuse to start if a previous crash left orphan partial files or a garbled
+# checksum file. Dry-run only — operator must run scrub with --delete-victims
+# and/or --repair-checksums to clean up, then `systemctl reset-failed`.
+ExecStartPre=/opt/simpler-objects/venv/bin/python -m simpler_objects.scrub ${OBJECT_DIRECTORY}
+
 # Adjust the venv path to wherever you installed the package.
 ExecStart=/opt/simpler-objects/venv/bin/uvicorn simpler_objects.object_server:app --host ${HOST} --port ${PORT} --workers ${WORKERS}
 

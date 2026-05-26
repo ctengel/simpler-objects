@@ -190,6 +190,31 @@ journalctl -u simpler-objects-async-replicate.service -n 50
 
 For cron-based scheduling instead, see [`../cron/README.md`](../cron/README.md).
 
+## Post-crash scrub preflight
+
+Every start of `simpler-objects-object-server@<instance>` runs `simpler_objects.scrub` in dry-run mode against `OBJECT_DIRECTORY` first (via `ExecStartPre=`). If a previous hard crash (SIGKILL / power loss) left an orphan partial file at a key path or a garbled `<bucket>.sha256` line, scrub exits non-zero and the unit refuses to start — restarting blindly on top of a dirty directory is exactly what we want to prevent.
+
+On a clean directory this is near-instant. The cost scales with file count.
+
+### Recovering from a scrub failure
+
+`systemctl status` shows the unit in `failed` state. The scrub output (what was found, which files) is in the journal:
+
+```
+sudo journalctl -u simpler-objects-object-server@disk1 -n 50
+```
+
+Inspect the `crash-victim:`, `stale-entry:`, and `garbled-line:` lines, then run scrub with the cleanup flags as the service user:
+
+```
+sudo -u simpler-objects /opt/simpler-objects/venv/bin/python \
+    -m simpler_objects.scrub --delete-victims --repair-checksums /srv/simpler-objects/disk1
+sudo systemctl reset-failed simpler-objects-object-server@disk1.service
+sudo systemctl start simpler-objects-object-server@disk1.service
+```
+
+`reset-failed` is required because systemd's start-limit kicks in after repeated `ExecStartPre` failures; without it the next `start` is a no-op.
+
 ## Operations
 
 - Logs: `journalctl -u simpler-objects-object-server@disk1 -f`, `journalctl -u simpler-objects-locator -f`
