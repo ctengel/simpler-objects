@@ -80,10 +80,7 @@ After a crash, **before restarting the object server**, run the scrub utility ag
 python -m simpler_objects.scrub /path/to/objects
 
 # Actually unlink orphan files and rewrite <bucket>.sha256 without garbled/stale lines
-python -m simpler_objects.scrub --apply --repair-checksums /path/to/objects
-
-# Only inspect files modified within the last hour (likely crash victims)
-python -m simpler_objects.scrub --apply --max-age 3600 /path/to/objects
+python -m simpler_objects.scrub --delete-victims --repair-checksums /path/to/objects
 ```
 
 A "crash victim" is any file in a bucket directory without a matching valid line in `<bucket>.sha256`. The scrub assumes the server is stopped — it doesn't coordinate with a running server.
