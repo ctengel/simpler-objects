@@ -1,7 +1,7 @@
 """Tests for simpler_objects.common shared utilities."""
 
 import pytest
-from simpler_objects.common import filter_write_candidates
+from simpler_objects.common import filter_write_candidates, parse_checksum_line
 
 SERVER = "http://node1:29171/"
 MB = 1024 * 1024
@@ -47,3 +47,35 @@ def test_multiple_servers_weighted():
     result = filter_write_candidates({s1: h1, s2: h2}, 10 * MB)
     assert result[s1] == 200 * MB * 80
     assert result[s2] == 100 * MB * 50
+
+
+# --- parse_checksum_line ---
+
+VALID_HEX = "a" * 64
+
+
+@pytest.mark.parametrize("line, expected", [
+    (f"{VALID_HEX}  file.txt\n", (VALID_HEX, "file.txt")),
+    (f"{VALID_HEX}  file.txt", (VALID_HEX, "file.txt")),
+    (f"  {VALID_HEX}  file.txt  \n", (VALID_HEX, "file.txt")),
+    (f"{'0123456789abcdef' * 4}  some-key.bin\n",
+     ("0123456789abcdef" * 4, "some-key.bin")),
+])
+def test_parse_checksum_line_valid(line, expected):
+    assert parse_checksum_line(line) == expected
+
+
+@pytest.mark.parametrize("line", [
+    "",                                       # empty
+    "\n",                                     # blank
+    "abc123\n",                               # one field only (torn line)
+    f"{VALID_HEX}\n",                         # one field, full hex but no filename
+    f"{VALID_HEX}  file.txt  extra\n",       # three fields
+    f"{'a' * 63}  file.txt\n",                # 63-char hex (too short)
+    f"{'a' * 65}  file.txt\n",                # 65-char hex (too long)
+    f"abc{VALID_HEX}  file.txt\n",            # absorbed-append: 67 chars first field
+    f"{'g' * 64}  file.txt\n",                # non-hex characters
+    f"{'A' * 64}  file.txt\n",                # uppercase rejected (server writes lowercase)
+])
+def test_parse_checksum_line_invalid(line):
+    assert parse_checksum_line(line) is None

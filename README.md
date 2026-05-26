@@ -69,6 +69,25 @@ Run an asynchronous replication periodically:
 python -m simpler_objects.async_replicate http://localhost:29164/ bucket 2
 ```
 
+## Post-crash scrub
+
+PUTs write the body in place to the final key path. A clean failure (client disconnect, length/digest mismatch, ENOSPC) unlinks the partial file before returning, but a hard crash (`SIGKILL`, power loss, kernel panic) can leave an orphan partial file at a key path — and may also leave a torn fragment in the bucket's `<bucket>.sha256` file.
+
+After a crash, **before restarting the object server**, run the scrub utility against its `OBJECT_DIRECTORY`:
+
+```
+# Inspect what would be removed (default — dry-run, prints a report)
+python -m simpler_objects.scrub /path/to/objects
+
+# Actually unlink orphan files and rewrite <bucket>.sha256 without garbled/stale lines
+python -m simpler_objects.scrub --apply --repair-checksums /path/to/objects
+
+# Only inspect files modified within the last hour (likely crash victims)
+python -m simpler_objects.scrub --apply --max-age 3600 /path/to/objects
+```
+
+A "crash victim" is any file in a bucket directory without a matching valid line in `<bucket>.sha256`. The scrub assumes the server is stopped — it doesn't coordinate with a running server.
+
 ## On-disk format
 
 The object server keeps all state as plain files: each bucket is a directory of object files, with a sibling `<bucket>.sha256` checksum file in standard `sha256sum` format. There is no database or index.
