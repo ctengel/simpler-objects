@@ -7,43 +7,25 @@ Run this **after a crash and before restarting** the object server.
 """
 
 import argparse
-import dataclasses
 import datetime
 import os
 import pathlib
 import sys
-import time
-from typing import Iterable, List, Optional, Set
+from typing import Set
 
 from simpler_objects.common import ChecksumFile, parse_checksum_line
 
 
-@dataclasses.dataclass
-class BucketReport:
-    name: str
-    valid_entries: int = 0
-    garbled_lines: List[str] = dataclasses.field(default_factory=list)
-    stale_entries: List[str] = dataclasses.field(default_factory=list)
-    crash_victims: List[pathlib.Path] = dataclasses.field(default_factory=list)
+def scan_bucket(bucket_dir: pathlib.Path):
+    """Inspect one bucket.
 
-    @property
-    def has_issues(self) -> bool:
-        return bool(self.garbled_lines or self.stale_entries or self.crash_victims)
-
-
-
-def scan_bucket(bucket_dir: pathlib.Path,
-                max_age: Optional[float] = None,
-                now: Optional[float] = None) -> BucketReport:
-    """Inspect one bucket and return a report.
-
-    A file in the bucket directory with no valid checksum entry is a
-    crash victim. Garbled checksum lines and stale entries (valid line,
-    file missing) are also collected but require --repair-checksums to
-    act on.
+    Returns (crash_victims, garbled_lines, stale_entries):
+      crash_victims — paths with no valid checksum entry
+      garbled_lines — unparseable lines in <bucket>.sha256
+      stale_entries — valid checksum lines whose file is missing
     """
-    report = BucketReport(name=bucket_dir.name)
     valid_keys: Set[str] = set()
+    garbled_lines = []
     cksum_path = ChecksumFile(bucket_dir).path
     if cksum_path.is_file():
         with open(cksum_path, encoding='utf-8') as fp:
@@ -52,36 +34,15 @@ def scan_bucket(bucket_dir: pathlib.Path,
                     continue
                 parsed = parse_checksum_line(line)
                 if parsed is None:
-                    report.garbled_lines.append(line.rstrip('\n'))
-                    continue
-                report.valid_entries += 1
-                valid_keys.add(parsed[1])
+                    garbled_lines.append(line.rstrip('\n'))
+                else:
+                    valid_keys.add(parsed[1])
 
-    on_disk = {entry.name for entry in bucket_dir.iterdir()
-               if entry.is_file() and not entry.is_symlink()}
-    report.stale_entries = sorted(valid_keys - on_disk)
-
-    cutoff: Optional[float] = None
-    if max_age is not None:
-        if now is None:
-            now = time.time()
-        cutoff = now - max_age
-
-    for entry in sorted(bucket_dir.iterdir()):
-        if not entry.is_file() or entry.is_symlink():
-            continue
-        if entry.name in valid_keys:
-            continue
-        if cutoff is not None and entry.stat().st_mtime < cutoff:
-            continue
-        report.crash_victims.append(entry)
-    return report
-
-
-def _iter_bucket_dirs(root: pathlib.Path) -> Iterable[pathlib.Path]:
-    for entry in sorted(root.iterdir()):
-        if entry.is_dir() and not entry.is_symlink():
-            yield entry
+    on_disk = {e.name for e in bucket_dir.iterdir()
+               if e.is_file() and not e.is_symlink()}
+    stale_entries = sorted(valid_keys - on_disk)
+    crash_victims = [bucket_dir / name for name in sorted(on_disk - valid_keys)]
+    return crash_victims, garbled_lines, stale_entries
 
 
 def _rewrite_checksum_file(bucket_dir: pathlib.Path,
@@ -108,73 +69,67 @@ def _rewrite_checksum_file(bucket_dir: pathlib.Path,
     os.replace(tmp_path, cksum.path)
 
 
-def _format_mtime(ts: float) -> str:
-    return datetime.datetime.fromtimestamp(ts).isoformat(timespec='seconds')
-
-
-def _print_report(report: BucketReport) -> None:
-    print(f"bucket {report.name}: "
-          f"{report.valid_entries} valid, "
-          f"{len(report.garbled_lines)} garbled, "
-          f"{len(report.stale_entries)} stale, "
-          f"{len(report.crash_victims)} crash-victim")
-    for line in report.garbled_lines:
-        print(f"  garbled-line: {line!r}")
-    for name in report.stale_entries:
-        print(f"  stale-entry: {name}")
-    for path in report.crash_victims:
-        st = path.stat()
-        print(f"  crash-victim: {path} size={st.st_size} mtime={_format_mtime(st.st_mtime)}")
-
-
 def scrub_directory(root: pathlib.Path,
-                    apply: bool = False,
-                    max_age: Optional[float] = None,
+                    delete_victims: bool = False,
                     repair_checksums: bool = False) -> bool:
     """Scan every bucket under root and act on findings.
 
     Returns True if the scan completed without issues OR every issue was
-    successfully acted on (apply=True path); False if any issue remains
-    (dry-run with findings, or apply with a delete failure).
+    successfully acted on; False if any issue remains (dry-run with findings,
+    or an action that failed).
     """
     if not root.is_dir():
         print(f"error: {root} is not a directory", file=sys.stderr)
         return False
 
-    now = time.time()
     any_issues = False
     any_unhandled = False
-    for bucket_dir in _iter_bucket_dirs(root):
-        report = scan_bucket(bucket_dir, max_age=max_age, now=now)
-        _print_report(report)
-        if not report.has_issues:
+    for bucket_dir in sorted(root.iterdir()):
+        if not bucket_dir.is_dir() or bucket_dir.is_symlink():
+            continue
+        crash_victims, garbled_lines, stale_entries = scan_bucket(bucket_dir)
+
+        print(f"bucket {bucket_dir.name}: "
+              f"{len(garbled_lines)} garbled, "
+              f"{len(stale_entries)} stale, "
+              f"{len(crash_victims)} crash-victim")
+        for line in garbled_lines:
+            print(f"  garbled-line: {line!r}")
+        for name in stale_entries:
+            print(f"  stale-entry: {name}")
+        for path in crash_victims:
+            st = path.stat()
+            mtime = datetime.datetime.fromtimestamp(st.st_mtime).isoformat(timespec='seconds')
+            print(f"  crash-victim: {path} size={st.st_size} mtime={mtime}")
+
+        if not any([crash_victims, garbled_lines, stale_entries]):
             continue
         any_issues = True
 
-        if not apply:
-            any_unhandled = True
-            continue
-
-        for path in report.crash_victims:
-            try:
-                path.unlink()
-                print(f"  removed: {path}")
-            except OSError as e:
-                print(f"  failed to remove {path}: {e}", file=sys.stderr)
+        for path in crash_victims:
+            if delete_victims:
+                try:
+                    path.unlink()
+                    print(f"  removed: {path}")
+                except OSError as e:
+                    print(f"  failed to remove {path}: {e}", file=sys.stderr)
+                    any_unhandled = True
+            else:
                 any_unhandled = True
 
-        if repair_checksums and (report.garbled_lines or report.stale_entries):
-            on_disk = {entry.name for entry in bucket_dir.iterdir()
-                       if entry.is_file() and not entry.is_symlink()}
-            try:
-                _rewrite_checksum_file(bucket_dir, on_disk)
-                print(f"  repaired: {ChecksumFile(bucket_dir).path}")
-            except OSError as e:
-                print(f"  failed to repair {ChecksumFile(bucket_dir).path}: {e}",
-                      file=sys.stderr)
+        if garbled_lines or stale_entries:
+            if repair_checksums:
+                on_disk = {e.name for e in bucket_dir.iterdir()
+                           if e.is_file() and not e.is_symlink()}
+                try:
+                    _rewrite_checksum_file(bucket_dir, on_disk)
+                    print(f"  repaired: {ChecksumFile(bucket_dir).path}")
+                except OSError as e:
+                    print(f"  failed to repair {ChecksumFile(bucket_dir).path}: {e}",
+                          file=sys.stderr)
+                    any_unhandled = True
+            else:
                 any_unhandled = True
-        elif report.garbled_lines or report.stale_entries:
-            any_unhandled = True
 
     if not any_issues:
         print("scrub: no issues found")
@@ -193,23 +148,17 @@ def cli():
     )
     parser.add_argument("directory",
                         help="OBJECT_DIRECTORY to scrub")
-    parser.add_argument("--apply", action="store_true",
-                        help="Actually unlink crash-victim files "
+    parser.add_argument("--delete-victims", action="store_true",
+                        help="Unlink crash-victim files "
                              "(default: dry-run report only)")
-    parser.add_argument("--max-age", type=float, default=None,
-                        metavar="SECONDS",
-                        help="Only inspect files modified within the last "
-                             "N seconds (likely crash victims). Default: "
-                             "inspect every file.")
     parser.add_argument("--repair-checksums", action="store_true",
                         help="Atomically rewrite each <bucket>.sha256 "
-                             "without garbled or stale lines. Requires "
-                             "--apply.")
+                             "without garbled or stale lines "
+                             "(default: dry-run report only)")
     args = parser.parse_args()
     clean = scrub_directory(
         pathlib.Path(args.directory),
-        apply=args.apply,
-        max_age=args.max_age,
+        delete_victims=args.delete_victims,
         repair_checksums=args.repair_checksums,
     )
     sys.exit(0 if clean else 1)
