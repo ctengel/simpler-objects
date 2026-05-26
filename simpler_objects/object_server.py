@@ -11,6 +11,9 @@ import os
 from typing import Annotated
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import FileResponse, Response
+from simpler_objects.common import check_content_type_extension
+
+from simpler_objects.common import ChecksumFile
 
 app = FastAPI()
 
@@ -19,9 +22,6 @@ READ_ONLY = bool(os.environ.get('READ_ONLY', ''))
 BUFFER = 67108864
 RETRY_AFTER = "64"
 
-def checksum_filename(bucket: pathlib.Path):
-    """Determine a bucket checksum file"""
-    return bucket.parent.joinpath(bucket.name).with_suffix('.sha256')
 
 def safe_path(base: pathlib.Path, *parts) -> pathlib.Path:
     """Resolve path and reject traversal outside base."""
@@ -68,42 +68,6 @@ def file_checksum(path):
             hash_sha256.update(chunk)
     return hash_sha256.digest()
 
-def append_checksum(path: pathlib.Path, file_digest: bytes):
-    """Durably append a sha256sum-format line for an object to its bucket checksum file.
-
-    The single O_APPEND os.write() is atomic against concurrent appenders (POSIX),
-    so different-key PUTs in the same bucket need no extra serialisation.
-    """
-    cksum_line = f"{file_digest.hex()}  {path.name}\n"
-    fd = os.open(checksum_filename(path.parent),
-                 os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-    try:
-        os.write(fd, cksum_line.encode())
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-def read_checksum(bucket_dir: pathlib.Path, key: str):
-    """Return the recorded SHA-256 digest for a key, or None.
-
-    Lines that do not parse cleanly (torn by a crash, or a torn fragment
-    merged with the next append) are skipped rather than raising.
-    """
-    try:
-        with open(checksum_filename(bucket_dir), encoding='utf-8') as fp:
-            for line in fp:
-                parts = line.strip().split()
-                # A valid sha256sum line has exactly two fields and a 64-char hex digest.
-                # Fewer/more fields catches truly torn lines; the length check catches a
-                # torn fragment that absorbed a later append (making one garbage field).
-                if len(parts) != 2 or len(parts[0]) != 64:
-                    continue
-                checksum, file_name = parts
-                if file_name == key:
-                    return bytes.fromhex(checksum)
-    except FileNotFoundError:
-        pass
-    return None
 
 @app.get('/health')
 def healthcheck():
@@ -141,7 +105,7 @@ def get_object(bucket: str, key: str):
         # open above and acquiring the lock.
         if not path.is_file():
             raise HTTPException(status_code=404)
-        my_cksum = read_checksum(path.parent, key)
+        my_cksum = ChecksumFile(path.parent).lookup(key)
     finally:
         os.close(fd)
     headers = None
@@ -154,6 +118,9 @@ async def put_object(bucket: str, key: str, request: Request,
                      content_length: Annotated[int | None, Header()] = None):
     if READ_ONLY:
         raise HTTPException(status_code=405)
+
+    if not check_content_type_extension(key, request.headers.get('content-type')):
+        raise HTTPException(status_code=415)
 
     path = object_filename(bucket, key)
 
@@ -183,7 +150,7 @@ async def put_object(bucket: str, key: str, request: Request,
             file_digest = await asyncio.to_thread(file_checksum, path)
             if request_digest and file_digest != request_digest:
                 raise HTTPException(status_code=400)
-            append_checksum(path, file_digest)
+            ChecksumFile(path.parent).append(path.name, file_digest)
             return Response(status_code=201, content=None,
                             headers={"Repr-Digest": http_digest_head(file_digest)})
         except OSError as e:
@@ -220,17 +187,7 @@ def list_directory(bucket: str):
         raise HTTPException(status_code=404)
     r = {"bucket": bucket,
          "objects": {}}
-    hashes = {}
-    try:
-        with open(checksum_filename(dir_path), encoding='utf-8') as fp:
-            for line in fp:
-                parts = line.strip().split()
-                if len(parts) != 2:
-                    continue
-                checksum, file_name = parts
-                hashes[file_name] = checksum
-    except FileNotFoundError:
-        pass
+    hashes = ChecksumFile(dir_path).as_dict()
     for name in dir_path.iterdir():
         if name.is_dir():
             r['objects'][name.name] = {'directory': True,
