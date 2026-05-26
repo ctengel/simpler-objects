@@ -1,0 +1,15 @@
+---
+locator_port: 29164
+locator_workers: 1
+
+# `locator_object_servers` must be set per-host in inventory — list of URLs
+# (with trailing slashes; the locator concatenates paths directly).
+# locator_object_servers: []
+
+simpler_objects_etc: /etc/simpler-objects
+simpler_objects_systemd_unit_dir: /etc/systemd/system
+locator_unit_filename: simpler-objects-locator.service
+
+# Service user/group — kept in sync with simpler_objects_common/defaults/main.yml.
+simpler_objects_user: simpler-objects
+simpler_objects_group: simpler-objects

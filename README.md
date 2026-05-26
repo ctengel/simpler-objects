@@ -104,6 +104,8 @@ Note that ObjectIndex has a legacy way to manage this. Simply move your old file
 
 `deploy/systemd/` ships a template object-server unit (one instance per attached disk), a single-instance locator unit, and example env files. The walkthrough in [`deploy/systemd/README.md`](deploy/systemd/README.md) covers Fedora and Raspberry Pi OS — venv install at `/opt/simpler-objects/venv`, mount-path convention at `/srv/simpler-objects/<instance>`, `systemctl enable --now` per instance.
 
+For a fleet of Raspberry Pis, [`deploy/ansible/`](deploy/ansible/) wraps the same units in an Ansible playbook: one inventory file describes every storage Pi and disk, and `ansible-playbook` handles install and future upgrades (`--tags update`).
+
 ## Client guidance
 
 ### Redirects (307)

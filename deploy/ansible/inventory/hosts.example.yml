@@ -1,0 +1,70 @@
+# Example inventory for the simpler-objects Ansible playbook.
+#
+# Copy this to inventory/hosts.yml and edit. Three groups drive the three
+# roles in site.yml:
+#
+#   object_servers — Pis with attached disks that hold object data
+#   locators       — host(s) running the cluster coordinator
+#   replicators    — host running the async-replication timer (often == locator)
+#
+# A host may belong to multiple groups. simpler_objects_common runs on every
+# group, so the venv only gets installed once even when a host serves more
+# than one role.
+
+all:
+  vars:
+    # The one knob you change to upgrade. The playbook pins the package to
+    # this git tag; bump and re-run with `--tags update` to upgrade.
+    simpler_objects_version: v0.4.0
+
+  children:
+
+    object_servers:
+      hosts:
+        pi-storage-1.lan:
+          object_server_instances:
+            # One entry per attached disk. `name` is the systemctl instance
+            # token (`@disk1` etc.); `object_directory` is the bucket parent
+            # directory — anywhere on the filesystem; the role generates the
+            # per-instance drop-in that points RequiresMountsFor= /
+            # ReadWritePaths= at it.
+            - name: disk1
+              object_directory: /mnt/extusb-a/simpler-objects/data
+              # Optional knobs (defaults shown):
+              # read_only: false      # set true for a read-only mirror node
+              # port: 29171
+              # workers: 1
+
+            - name: disk2
+              object_directory: /mnt/extusb-b/simpler-objects/data
+              read_only: true        # RO mirror
+              port: 29172            # alternate port on the same host
+
+        pi-storage-2.lan:
+          object_server_instances:
+            - name: disk1
+              object_directory: /mnt/usb1/simpler-objects/data
+
+    locators:
+      hosts:
+        pi-coord.lan:
+          locator_object_servers:
+            - http://pi-storage-1.lan:29171/
+            - http://pi-storage-1.lan:29172/
+            - http://pi-storage-2.lan:29171/
+          # Optional:
+          # locator_port: 29164
+          # locator_workers: 1
+
+    replicators:
+      hosts:
+        pi-coord.lan:                # same host as the locator is fine
+          replicate_locator_url: http://localhost:29164/
+          replicate_buckets:
+            - photos
+            - backups
+          replicate_replicas: 2
+          # Optional per-bucket overrides — keys are bucket names (any case);
+          # the role uppercases them for the REPLICAS_<BUCKET>= env var.
+          replicate_replicas_overrides:
+            backups: 3

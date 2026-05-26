@@ -6,6 +6,11 @@ Production deployment of `simpler-objects` via systemd. The repo ships:
 - `simpler-objects-locator.service` — single-instance locator
 - `env/object-server.env.example`, `env/locator.env.example` — per-host configuration
 
+> Driving a fleet of Pis? An Ansible playbook that wraps this entire walkthrough
+> — install, per-instance config, future upgrades — lives at
+> [`../ansible/`](../ansible/). It uses the same unit files; the manual
+> instructions below are the source of truth for what it does.
+
 ## Tested on
 
 - Fedora

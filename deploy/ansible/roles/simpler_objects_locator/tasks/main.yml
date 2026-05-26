@@ -1,0 +1,71 @@
+---
+- name: Require locator_object_servers
+  ansible.builtin.assert:
+    that:
+      - locator_object_servers is defined
+      - locator_object_servers | length > 0
+    fail_msg: >
+      `locator_object_servers` must be set on the locator host — list of
+      object-server URLs with trailing slashes.
+    quiet: true
+  tags: [config]
+
+- name: Validate object-server URLs end with trailing slash
+  ansible.builtin.assert:
+    that: item.endswith('/')
+    fail_msg: >
+      Object-server URL `{{ item }}` must end with a trailing slash. The
+      locator concatenates paths directly onto it.
+    quiet: true
+  loop: "{{ locator_object_servers }}"
+  tags: [config]
+
+- name: Ensure /etc/simpler-objects exists
+  ansible.builtin.file:
+    path: "{{ simpler_objects_etc }}"
+    state: directory
+    owner: root
+    group: "{{ simpler_objects_group }}"
+    mode: "0750"
+  tags: [config]
+
+- name: Render locator env file
+  ansible.builtin.template:
+    src: locator.env.j2
+    dest: "{{ simpler_objects_etc }}/locator.env"
+    owner: root
+    group: "{{ simpler_objects_group }}"
+    mode: "0640"
+  register: _so_locator_env
+  tags: [config]
+
+- name: Install locator unit
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../systemd/{{ locator_unit_filename }}"
+    dest: "{{ simpler_objects_systemd_unit_dir }}/{{ locator_unit_filename }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: _so_locator_unit
+  notify: simpler_objects_locator_daemon_reload
+  tags: [unit]
+
+- name: Flush handlers so daemon-reload runs before enable
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start simpler-objects-locator
+  ansible.builtin.systemd:
+    name: simpler-objects-locator.service
+    enabled: true
+    state: started
+  tags: [config, update]
+
+- name: Restart locator on env, unit, or venv change
+  ansible.builtin.systemd:
+    name: simpler-objects-locator.service
+    state: restarted
+  when: >
+    (_so_locator_env is changed)
+    or (_so_locator_unit is changed)
+    or (simpler_objects_venv_updated | default(false) | bool)
+  tags: [config, update]

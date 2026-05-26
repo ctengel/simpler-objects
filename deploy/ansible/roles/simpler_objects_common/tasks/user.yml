@@ -1,0 +1,23 @@
+---
+- name: Create simpler-objects system group
+  ansible.builtin.group:
+    name: "{{ simpler_objects_group }}"
+    system: true
+    state: present
+
+- name: Create simpler-objects system user
+  ansible.builtin.user:
+    name: "{{ simpler_objects_user }}"
+    group: "{{ simpler_objects_group }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
+
+- name: Ensure install root exists
+  ansible.builtin.file:
+    path: "{{ simpler_objects_install_root }}"
+    state: directory
+    owner: "{{ simpler_objects_user }}"
+    group: "{{ simpler_objects_group }}"
+    mode: "0755"

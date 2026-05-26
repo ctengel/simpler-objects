@@ -1,0 +1,12 @@
+---
+- name: OS packages
+  ansible.builtin.import_tasks: packages.yml
+  tags: [packages, install]
+
+- name: Service user and install root
+  ansible.builtin.import_tasks: user.yml
+  tags: [user, install]
+
+- name: Venv and pip install
+  ansible.builtin.import_tasks: venv.yml
+  tags: [venv, install, update]

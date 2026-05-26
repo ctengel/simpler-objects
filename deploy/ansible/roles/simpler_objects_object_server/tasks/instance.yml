@@ -1,0 +1,67 @@
+---
+# One iteration of the instance loop. `instance` is the loop_var.
+
+- name: Verify OBJECT_DIRECTORY exists and is writable by the service user, instance {{ instance.name }}
+  # The role does NOT chown the data directory — buckets are already present
+  # and re-owning user data silently would be surprising. Fail loudly instead.
+  ansible.builtin.command:
+    cmd: "test -w {{ instance.object_directory | quote }}"
+  become: true
+  become_user: "{{ simpler_objects_user }}"
+  changed_when: false
+  register: _so_dir_check
+  failed_when: _so_dir_check.rc != 0
+  tags: [config]
+
+- name: Render env file for instance {{ instance.name }}
+  ansible.builtin.template:
+    src: object-server.env.j2
+    dest: "{{ simpler_objects_etc }}/object-server-{{ instance.name }}.env"
+    owner: root
+    group: "{{ simpler_objects_group }}"
+    mode: "0640"
+  register: _so_env_file
+  tags: [config]
+
+- name: Ensure drop-in directory exists for instance {{ instance.name }}
+  ansible.builtin.file:
+    path: "{{ simpler_objects_systemd_unit_dir }}/simpler-objects-object-server@{{ instance.name }}.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [config]
+
+- name: Render mount/ReadWritePaths drop-in for instance {{ instance.name }}
+  ansible.builtin.template:
+    src: object-server-override.conf.j2
+    dest: "{{ simpler_objects_systemd_unit_dir }}/simpler-objects-object-server@{{ instance.name }}.service.d/override.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  register: _so_override
+  notify: simpler_objects_object_server_daemon_reload
+  tags: [config]
+
+# Daemon-reload (if needed) must happen before we enable/start. The base
+# unit's reload handler was flushed in main.yml; here we flush again for
+# any drop-in changes from *this* iteration.
+- name: Flush handlers so drop-in changes are picked up before enable
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start object-server instance {{ instance.name }}
+  ansible.builtin.systemd:
+    name: "simpler-objects-object-server@{{ instance.name }}.service"
+    enabled: true
+    state: started
+  tags: [config, update]
+
+- name: Restart on env, drop-in, or venv change, instance {{ instance.name }}
+  ansible.builtin.systemd:
+    name: "simpler-objects-object-server@{{ instance.name }}.service"
+    state: restarted
+  when: >
+    (_so_env_file is changed)
+    or (_so_override is changed)
+    or (simpler_objects_venv_updated | default(false) | bool)
+  tags: [config, update]

@@ -1,0 +1,54 @@
+---
+- name: Require replicate_buckets
+  ansible.builtin.assert:
+    that:
+      - replicate_buckets is defined
+      - replicate_buckets | length > 0
+    fail_msg: >
+      `replicate_buckets` must be set on the replicator host — list of bucket
+      names to replicate.
+    quiet: true
+  tags: [config]
+
+- name: Ensure /etc/simpler-objects exists
+  ansible.builtin.file:
+    path: "{{ simpler_objects_etc }}"
+    state: directory
+    owner: root
+    group: "{{ simpler_objects_group }}"
+    mode: "0750"
+  tags: [config]
+
+- name: Render async-replicate env file
+  ansible.builtin.template:
+    src: async-replicate.env.j2
+    dest: "{{ simpler_objects_etc }}/async-replicate.env"
+    owner: root
+    group: "{{ simpler_objects_group }}"
+    mode: "0640"
+  tags: [config]
+
+- name: Install async-replicate service and timer units
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../systemd/{{ item }}"
+    dest: "{{ simpler_objects_systemd_unit_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - "{{ async_replicate_service_filename }}"
+    - "{{ async_replicate_timer_filename }}"
+  notify: simpler_objects_async_replicate_daemon_reload
+  tags: [unit]
+
+- name: Flush handlers so daemon-reload runs before enable
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start async-replicate timer
+  ansible.builtin.systemd:
+    name: simpler-objects-async-replicate.timer
+    enabled: true
+    state: started
+  tags: [config, update]
+  # The service is Type=oneshot; we don't restart it here. The timer's next
+  # firing picks up the new venv automatically.

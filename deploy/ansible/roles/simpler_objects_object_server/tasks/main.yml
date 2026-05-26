@@ -1,0 +1,38 @@
+---
+- name: Fail early if no object_server_instances declared
+  ansible.builtin.assert:
+    that: object_server_instances is defined and object_server_instances | length > 0
+    fail_msg: >
+      No `object_server_instances` declared for this host. Add at least one
+      entry with `name` and `object_directory` in inventory.
+  tags: [config]
+
+- name: Ensure /etc/simpler-objects exists
+  ansible.builtin.file:
+    path: "{{ simpler_objects_etc }}"
+    state: directory
+    owner: root
+    group: "{{ simpler_objects_group }}"
+    mode: "0750"
+  tags: [config]
+
+- name: Install object-server template unit
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../systemd/{{ object_server_unit_filename }}"
+    dest: "{{ simpler_objects_systemd_unit_dir }}/{{ object_server_unit_filename }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: simpler_objects_object_server_daemon_reload
+  tags: [unit]
+
+- name: Flush handlers so the unit is registered before we enable instances
+  ansible.builtin.meta: flush_handlers
+
+- name: Configure each object-server instance
+  ansible.builtin.include_tasks: instance.yml
+  loop: "{{ object_server_instances }}"
+  loop_control:
+    loop_var: instance
+    label: "{{ instance.name }}"
+  tags: [config, update]
