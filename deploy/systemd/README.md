@@ -181,6 +181,8 @@ journalctl -u simpler-objects-async-replicate.service -n 50
 
 `simpler-objects-async-replicate` exits non-zero if any object in any bucket couldn't be replicated (out of space, locator unreachable, source unavailable). systemd records the failure but does not retry until the next timer firing — that's the intended behaviour. If you want the locator on the same host as the replicator to come up first, the unit file comments show the drop-in.
 
+`Type=oneshot` prevents concurrent runs: if the hourly timer fires while a previous run is still active, systemd queues the new start and runs it back-to-back after the first finishes. For this idempotent job that is harmless — the second run finds replicas already satisfied and exits quickly.
+
 For cron-based scheduling instead, see [`../cron/README.md`](../cron/README.md).
 
 ## Operations
