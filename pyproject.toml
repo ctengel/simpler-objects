@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "simpler-objects"
+version = "0.4.0"
+description = "A simpler object storage service"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "ctengel" }]
+keywords = ["object-storage", "fastapi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Framework :: FastAPI",
+    "Topic :: System :: Archiving",
+]
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+]
+
+[project.optional-dependencies]
+client = ["pycurl"]
+test = [
+    "pytest",
+    "respx",
+    "jsonschema",
+    "referencing",
+    "pyyaml",
+    "pycurl",
+]
+
+[project.scripts]
+simpler-objects-async-replicate = "simpler_objects.async_replicate:cli"
+# TODO(#64): simpler-objects-scrub = "simpler_objects.scrub:cli" — add when issue-64 branch merges
+# The object server and locator are launched via `uvicorn simpler_objects.{object_server,locator_api}:app`
+# directly — no console-script wrapper. Use systemd Environment= for HOST/PORT/WORKERS defaults.
+
+[project.urls]
+Repository = "https://github.com/ctengel/simpler-objects"
+
+[tool.hatch.build.targets.wheel]
+packages = ["simpler_objects"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "simpler_objects/",
+    "tests/",
+    "openapi.yaml",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]

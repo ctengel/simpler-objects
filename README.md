@@ -1,6 +1,24 @@
 # simpler-objects
 A simpler object storage service
 
+## Installation
+
+Requires Python 3.12 or newer. Install from a git tag into a virtualenv:
+
+```
+pip install git+https://github.com/ctengel/simpler-objects@v0.4.0
+```
+
+The base install pulls in `fastapi`, `uvicorn`, and `httpx`. The Python upload/download client (`simpler_objects.client`) depends on `pycurl`, which is split out into an optional extra so the servers can be installed on hosts without libcurl development headers:
+
+```
+pip install 'git+https://github.com/ctengel/simpler-objects@v0.4.0#egg=simpler-objects[client]'
+```
+
+`[client]` requires `libcurl` headers — `dnf install libcurl-devel` on Fedora, `apt install libcurl4-openssl-dev` on Debian/Raspberry Pi OS.
+
+For development, clone and `pip install -e '.[test]'` to pull in test dependencies (pytest, respx, jsonschema, etc).
+
 ## Start storage servers
 
 For each filesystem/drive

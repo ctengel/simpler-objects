@@ -8,7 +8,7 @@ from typing import Annotated
 import httpx
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import RedirectResponse, Response
-from simpler_objects.common import filter_write_candidates
+from simpler_objects.common import check_content_type_extension, filter_write_candidates
 
 OBJECT_SERVERS = os.environ.get('OBJECT_SERVERS', 'http://localhost:46579/')
 
@@ -79,10 +79,14 @@ async def find_object(bucket: str, key: str):
     raise HTTPException(status_code=404)
 
 @app.put("/{bucket}/{key}")
-async def add_object(bucket: str, key: str, content_length: Annotated[int | None, Header()] = None):
+async def add_object(bucket: str, key: str,
+                     content_length: Annotated[int | None, Header()] = None,
+                     content_type: Annotated[str | None, Header()] = None):
     """Return a redirect to a server that can handle an object request"""
     if content_length is None:
         raise HTTPException(status_code=411)
+    if not check_content_type_extension(key, content_type):
+        raise HTTPException(status_code=415)
     object_path = f"{bucket}/{key}"
     # TODO use caches of objects and servers but then double check vs checking everybody
     all_obj_servers = object_servers()

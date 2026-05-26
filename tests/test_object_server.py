@@ -184,6 +184,25 @@ def test_path_traversal_returns_404(tmp_path, monkeypatch):
     assert exc_info.value.status_code == 404
 
 
+@pytest.mark.parametrize("filename,content_type,expected_status", [
+    ("photo.jpg",  "image/jpeg",                201),  # exact match
+    ("readme.txt", "text/plain; charset=utf-8", 201),  # params stripped
+    ("photo.jpg",  "application/octet-stream",  201),  # generic binary wildcard
+    ("photo.jpg",  None,                        201),  # no header → no validation
+    ("datafile",   "text/plain",                201),  # no extension → no validation
+    ("photo.jpg",  "text/plain",                415),  # mismatch
+    ("readme.txt", "image/jpeg",                415),  # mismatch
+])
+def test_put_content_type_extension_validation(client, tmp_path, filename, content_type, expected_status):
+    headers = {}
+    if content_type is not None:
+        headers["Content-Type"] = content_type
+    resp = client.put(f"/{BUCKET}/{filename}", content=b"data", headers=headers)
+    assert resp.status_code == expected_status
+    if expected_status == 415:
+        assert not (tmp_path / BUCKET / filename).exists()
+
+
 def test_get_skips_malformed_checksum_line(uploaded, tmp_path):
     """A torn line in the bucket checksum file does not break GET."""
     cksum_file = tmp_path / f"{BUCKET}.sha256"
