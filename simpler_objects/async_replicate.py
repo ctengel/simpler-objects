@@ -1,6 +1,7 @@
 """Basic simple bucket async replication"""
 
 import argparse
+import os
 import warnings
 import random
 import sys
@@ -109,14 +110,25 @@ def auto_replica(locator, bucket, replicas):
 def cli():
     """CLI"""
     parser = argparse.ArgumentParser()
-    #parser.add_argument("source")
-    #parser.add_argument("dest")
     parser.add_argument("locator")
-    parser.add_argument("bucket")
-    parser.add_argument("replicas", type=int)
+    parser.add_argument("buckets", nargs="*")
+    parser.add_argument("--replicas", type=int)
     args = parser.parse_args()
-    #replicate_bucket(args.source, args.dest)
-    sys.exit(int(not auto_replica(args.locator, args.bucket, args.replicas)))
+
+    buckets = args.buckets or os.environ.get("BUCKETS", "").split()
+    if not buckets:
+        parser.error("specify at least one bucket or set BUCKETS env var")
+
+    if args.replicas is not None:
+        results = [auto_replica(args.locator, b, args.replicas) for b in buckets]
+    else:
+        default_replicas = int(os.environ.get("REPLICAS", "2"))
+        results = [
+            auto_replica(args.locator, b,
+                         int(os.environ.get(f"REPLICAS_{b.upper()}", default_replicas)))
+            for b in buckets
+        ]
+    sys.exit(int(not all(results)))
 
 
 if __name__ == '__main__':
