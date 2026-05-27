@@ -1,0 +1,3 @@
+---
+object_server_port: 29171
+object_server_workers: 1

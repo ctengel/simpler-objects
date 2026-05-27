@@ -189,6 +189,18 @@ def test_add_object_conflict(client):
 
 
 @respx.mock
+def test_add_object_mid_write_returns_409(client):
+    """A 503 on the existence check (key being written/replicated) must be treated as
+    a conflict — the key is in use and cannot be claimed by a new PUT."""
+    respx.get(SERVER_A + "health").mock(return_value=httpx.Response(200, json=_health()))
+    respx.get(SERVER_B + "health").mock(return_value=httpx.Response(200, json=_health()))
+    respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(503))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    resp = client.put(f"/{OBJ_PATH}", headers={"Content-Length": "100"}, follow_redirects=False)
+    assert resp.status_code == 409
+
+
+@respx.mock
 def test_add_object_no_writable_servers(client):
     no_space = _health(write=False, available=0, percent=0)
     respx.get(SERVER_A + "health").mock(return_value=httpx.Response(200, json=no_space))

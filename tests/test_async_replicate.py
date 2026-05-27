@@ -13,6 +13,7 @@ import pytest
 import respx
 
 from simpler_objects.async_replicate import (
+    auto_replica,
     find_space,
     get_bucket_contents,
     get_object_size,
@@ -219,3 +220,68 @@ def test_replicate_object_aborts_if_dest_exists():
 
     with pytest.raises(AssertionError):
         replicate_object(SRC, DST)
+
+
+# ---------------------------------------------------------------------------
+# auto_replica — parallel-operation safety (PR #67 comment)
+# ---------------------------------------------------------------------------
+
+NEEDLE_KEY = "needs_replica.bin"
+NEEDLE_SRC = SERVER_A + BUCKET + "/" + NEEDLE_KEY
+NEEDLE_DST = SERVER_B + BUCKET + "/" + NEEDLE_KEY
+
+
+@respx.mock
+def test_auto_replica_skips_no_checksum_object():
+    """Objects with no checksum (mid-PUT) are warned about and skipped; job continues."""
+    contents = {"objects": {
+        "partial.bin": {"size": 50, "directory": False, "checksum": None,
+                        "locations": [SERVER_A], "error": False},
+        "done.bin": {"size": len(CONTENT), "directory": False, "checksum": CKSUM,
+                     "locations": [SERVER_A, SERVER_B], "error": False},
+    }}
+    respx.get(LOCATOR + BUCKET + "/").mock(return_value=httpx.Response(200, json=contents))
+
+    with pytest.warns(UserWarning, match="partial.bin"):
+        result = auto_replica(LOCATOR, BUCKET, 2)
+
+    # done.bin already has 2 replicas so no replication work was needed, but
+    # the partial object must still flip the error flag.
+    assert result is False
+
+
+@respx.mock
+def test_auto_replica_continues_past_partial_object():
+    """Replication of complete objects proceeds even when a partial one is skipped."""
+    contents = {"objects": {
+        "partial.bin": {"size": 50, "directory": False, "checksum": None,
+                        "locations": [SERVER_A], "error": False},
+        NEEDLE_KEY: {"size": len(CONTENT), "directory": False, "checksum": CKSUM,
+                     "locations": [SERVER_A], "error": False},
+    }}
+    respx.get(LOCATOR + BUCKET + "/").mock(return_value=httpx.Response(200, json=contents))
+
+    # find_space internals: health check + bucket existence on candidate
+    health = {"servers": {SERVER_A: _health(), SERVER_B: _health()}}
+    respx.get(LOCATOR + "health").mock(return_value=httpx.Response(200, json=health))
+    respx.head(SERVER_B + BUCKET + "/").mock(return_value=httpx.Response(200))
+
+    # replicate_object internals for NEEDLE_KEY
+    respx.head(NEEDLE_SRC).mock(return_value=httpx.Response(
+        200, headers={"Content-Length": str(len(CONTENT)), "Repr-Digest": CKSUM},
+    ))
+    respx.head(NEEDLE_DST).mock(side_effect=_dst_head_sequence(
+        httpx.Response(404),
+        httpx.Response(200, headers={"Content-Length": str(len(CONTENT)), "Repr-Digest": CKSUM}),
+    ))
+    respx.get(NEEDLE_SRC).mock(return_value=httpx.Response(
+        200, content=CONTENT,
+        headers={"Content-Length": str(len(CONTENT)), "Repr-Digest": CKSUM},
+    ))
+    put_route = respx.put(NEEDLE_DST).mock(return_value=httpx.Response(201))
+
+    with pytest.warns(UserWarning, match="partial.bin"):
+        result = auto_replica(LOCATOR, BUCKET, 2)
+
+    assert result is False          # error flag set for the partial object
+    assert put_route.called         # replication of the complete object ran

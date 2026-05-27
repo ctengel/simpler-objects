@@ -1,0 +1,11 @@
+# Example /etc/cron.d/simpler-objects-async-replicate entry.
+# One cron entry handles every bucket listed in BUCKETS. Per-bucket replica
+# overrides use REPLICAS_<UPPERCASE_BUCKET>.
+#
+# Format: minute hour day-of-month month day-of-week user command
+#
+# Adjust the venv path on the right-hand side if you installed the package
+# somewhere other than /home/simpler-objects/venv.
+
+# All buckets: target 2 replicas by default, "backups" gets 3, every hour at :17.
+17 *    * * *   simpler-objects   BUCKETS="photos backups" REPLICAS=2 REPLICAS_BACKUPS=3 /home/simpler-objects/venv/bin/simpler-objects-async-replicate http://localhost:29164/

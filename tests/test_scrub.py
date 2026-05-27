@@ -3,6 +3,8 @@
 import hashlib
 import os
 import pathlib
+import subprocess
+import sys
 import time
 
 import pytest
@@ -233,3 +235,24 @@ def test_repair_skipped_when_no_dirty_lines(root):
     scrub.scrub_directory(root, delete_victims=True, repair_checksums=True)
     # No issues, no rewrite — mtime unchanged.
     assert cksum.stat().st_mtime == mtime_before
+
+
+# --- CLI exit codes (contract the object-server systemd ExecStartPre depends on) ---
+
+def test_cli_exit_code_clean_dir_returns_0(root):
+    _write_object(root, BUCKET, "a.bin", b"hello")
+    result = subprocess.run(
+        [sys.executable, "-m", "simpler_objects.scrub", str(root)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_cli_exit_code_dirty_dir_returns_1(root):
+    _write_object(root, BUCKET, "orphan.bin", b"partial", with_checksum=False)
+    result = subprocess.run(
+        [sys.executable, "-m", "simpler_objects.scrub", str(root)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "crash-victim" in result.stdout

@@ -1,0 +1,7 @@
+---
+replicate_locator_url: http://localhost:29164/
+replicate_replicas: 2
+# `replicate_buckets` (list) must be set per-host in inventory.
+# replicate_buckets: []
+# Optional dict of per-bucket overrides — keys are bucket names (any case).
+replicate_replicas_overrides: {}

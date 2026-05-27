@@ -1,0 +1,18 @@
+---
+- name: Prerequisites check
+  ansible.builtin.import_tasks: prereqs.yml
+  tags: [packages, user, install]
+
+- name: Ensure config and systemd user dirs exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ simpler_objects_config_dir }}"
+    - "{{ simpler_objects_systemd_user_dir }}"
+  tags: [install]
+
+- name: Venv and pip install
+  ansible.builtin.import_tasks: venv.yml
+  tags: [venv, install, update]

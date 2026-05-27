@@ -64,10 +64,12 @@ Restart locator with second object server included:
 OBJECT_SERVERS="http://localhost:29171/,http://localhost:29172/" fastapi dev --port 29164 simpler_objects/locator_api.py
 ```
 
-Run an asynchronous replication periodically:
+Run an asynchronous replication once (handy for debugging):
 ```
 python -m simpler_objects.async_replicate http://localhost:29164/ bucket 2
 ```
+
+For periodic scheduling, see [`deploy/systemd/README.md`](deploy/systemd/README.md) (systemd timer, one per bucket) or [`deploy/cron/README.md`](deploy/cron/README.md) (cron equivalent).
 
 ## Post-crash scrub
 
@@ -113,6 +115,14 @@ Note that ObjectIndex has a legacy way to manage this. Simply move your old file
 - create buckets at top level with date `mkdir /path/to/bucket-20000101`
 - run in screen
 - change `fastapi dev` to `fastapi run` for prod
+
+## Installing as a service
+
+`deploy/systemd/` ships systemd **user** units for the object server, locator, and async-replicate timer, plus example env files. The walkthrough in [`deploy/systemd/README.md`](deploy/systemd/README.md) covers Fedora and Raspberry Pi OS: venv at `~/venv`, config at `~/.config/simpler-objects/`, units at `~/.config/systemd/user/`, `systemctl --user enable --now`. Services run under a non-root service account; the only root steps are one-time (install packages, create the user, chown the data dir, enable linger).
+
+For a fleet of Raspberry Pis, [`deploy/ansible/`](deploy/ansible/) wraps the same units in a no-sudo playbook driven by one inventory file (`--tags update` re-runs only pip + restart on a version bump).
+
+For cron-based replication scheduling (alternative to the systemd timer), see [`deploy/cron/README.md`](deploy/cron/README.md).
 
 ## Client guidance
 

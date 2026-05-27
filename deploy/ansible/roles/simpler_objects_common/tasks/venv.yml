@@ -1,0 +1,41 @@
+---
+- name: Create the venv (idempotent — only on first run)
+  ansible.builtin.command:
+    cmd: "python3 -m venv {{ simpler_objects_venv }}"
+    creates: "{{ simpler_objects_venv }}/bin/python"
+
+# We track the installed git ref in a marker file because pip's idempotency
+# is unreliable with git+URLs: a `pip install git+...@v0.4.0` followed by
+# `pip install git+...@v0.4.1` is a no-op unless we pass --force-reinstall,
+# since pip only checks the *package name* against what's already installed,
+# not the ref. The marker is cheap, explicit, and survives venv recreation.
+- name: Read currently-installed simpler-objects ref
+  ansible.builtin.slurp:
+    src: "{{ simpler_objects_venv }}/.simpler-objects.installed-ref"
+  register: _so_installed_ref
+  failed_when: false
+  changed_when: false
+
+- name: Install / upgrade simpler-objects in the venv
+  ansible.builtin.pip:
+    name: "git+{{ simpler_objects_git_url }}@{{ simpler_objects_version }}"
+    state: forcereinstall
+    virtualenv: "{{ simpler_objects_venv }}"
+  register: _so_pip_install
+  when: >
+    simpler_objects_force_reinstall | bool
+    or _so_installed_ref.content is not defined
+    or (_so_installed_ref.content | b64decode | trim) != simpler_objects_version
+
+- name: Record the installed git ref
+  ansible.builtin.copy:
+    dest: "{{ simpler_objects_venv }}/.simpler-objects.installed-ref"
+    content: "{{ simpler_objects_version }}\n"
+    mode: "0644"
+
+# Signal to later plays (object_server, locator) that the venv was just
+# refreshed so they restart their units. Handler-based notification can't
+# cross plays in Ansible, but host facts do.
+- name: Flag venv as updated this run
+  ansible.builtin.set_fact:
+    simpler_objects_venv_updated: "{{ _so_pip_install is defined and _so_pip_install is changed }}"

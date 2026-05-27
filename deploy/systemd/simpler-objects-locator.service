@@ -1,0 +1,31 @@
+[Unit]
+Description=Simpler Objects locator
+Documentation=https://github.com/ctengel/simpler-objects
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+EnvironmentFile=%E/simpler-objects/locator.env
+
+# Defaults; values in the env file override these.
+Environment=HOST=0.0.0.0
+Environment=PORT=29164
+Environment=WORKERS=1
+
+# Adjust the venv path with a drop-in if you installed elsewhere.
+ExecStart=%h/venv/bin/uvicorn simpler_objects.locator_api:app --host ${HOST} --port ${PORT} --workers ${WORKERS}
+
+Restart=on-failure
+RestartSec=5s
+
+# Sandboxing (subset compatible with user units)
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=default.target
