@@ -1,7 +1,7 @@
 ---
 # Package source. Bump this to upgrade; pip detects the changed ref and
 # reinstalls. Idempotent at the same tag.
-simpler_objects_version: v0.4.0
+simpler_objects_version: v0.4.2
 simpler_objects_git_url: https://github.com/ctengel/simpler-objects
 
 # Install layout. The systemd units use %h/venv as the default venv path;
