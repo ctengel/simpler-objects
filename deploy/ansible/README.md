@@ -18,7 +18,7 @@ These steps require root. They only need to be done once.
 apt update && apt install -y python3 python3-venv git
 
 # 2. Create the service user (--create-home required for systemd user units)
-useradd --system --create-home --shell /usr/sbin/nologin simpler-objects
+useradd --system --create-home --shell /bin/bash simpler-objects
 
 # 3. (Storage nodes) Mount disks via /etc/fstab, then chown the data subdir
 mkdir -p /mnt/extusb-a/simpler-objects/data
@@ -80,7 +80,7 @@ After a real run:
 
 ```bash
 ssh -l simpler-objects pi-storage-1.lan \
-    systemctl --user is-active simpler-objects-object-server@disk1
+    systemctl --user is-active simpler-objects-object-server
 curl http://pi-storage-1.lan:29171/health
 curl http://pi-coord.lan:29164/health
 ssh -l simpler-objects pi-coord.lan \
@@ -172,9 +172,10 @@ managed via `systemctl --user`. The only root involvement is the one-time
 prerequisite steps (packages, user creation, disk chown, linger) documented
 above.
 
-The `packages` and `user` tasks in `simpler_objects_common` assert that
-prerequisites are in place and fail with a clear message if they are not,
-rather than attempting to install them.
+The `prereqs.yml` tasks in `simpler_objects_common` assert that the
+prerequisites are in place (python3, python3-venv, git, linger enabled for
+the connecting user) and fail with a clear message if they are not, rather
+than attempting to install them.
 
 ## Layout
 

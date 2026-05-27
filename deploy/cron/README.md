@@ -8,7 +8,7 @@ Cron alternative to the systemd timer in `deploy/systemd/` for `simpler_objects.
 
 ## Install (Fedora and Raspberry Pi OS)
 
-Assumes the package is installed at `/opt/simpler-objects/venv` and the `simpler-objects` system user already exists (see `../systemd/README.md`).
+Assumes the package is installed at `/home/simpler-objects/venv` and the `simpler-objects` service user already exists (see `../systemd/README.md` for the one-time root prerequisites — package install, user creation, disk chown).
 
 ```
 sudo install -m 0644 deploy/cron/async-replicate.cron.example \

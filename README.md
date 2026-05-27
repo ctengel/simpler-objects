@@ -118,9 +118,11 @@ Note that ObjectIndex has a legacy way to manage this. Simply move your old file
 
 ## Installing as a service
 
-`deploy/systemd/` ships a template object-server unit (one instance per attached disk), a single-instance locator unit, and example env files. The walkthrough in [`deploy/systemd/README.md`](deploy/systemd/README.md) covers Fedora and Raspberry Pi OS — venv install at `/opt/simpler-objects/venv`, mount-path convention at `/srv/simpler-objects/<instance>`, `systemctl enable --now` per instance.
+`deploy/systemd/` ships systemd **user** units for the object server, locator, and async-replicate timer, plus example env files. The walkthrough in [`deploy/systemd/README.md`](deploy/systemd/README.md) covers Fedora and Raspberry Pi OS: venv at `~/venv`, config at `~/.config/simpler-objects/`, units at `~/.config/systemd/user/`, `systemctl --user enable --now`. Services run under a non-root service account; the only root steps are one-time (install packages, create the user, chown the data dir, enable linger).
 
-For a fleet of Raspberry Pis, [`deploy/ansible/`](deploy/ansible/) wraps the same units in an Ansible playbook: one inventory file describes every storage Pi and disk, and `ansible-playbook` handles install and future upgrades (`--tags update`).
+For a fleet of Raspberry Pis, [`deploy/ansible/`](deploy/ansible/) wraps the same units in a no-sudo playbook driven by one inventory file (`--tags update` re-runs only pip + restart on a version bump).
+
+For cron-based replication scheduling (alternative to the systemd timer), see [`deploy/cron/README.md`](deploy/cron/README.md).
 
 ## Client guidance
 

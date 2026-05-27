@@ -6,7 +6,7 @@ one-time prerequisites are done.
 
 The repo ships:
 
-- `simpler-objects-object-server@.service` — template unit, one instance per attached disk
+- `simpler-objects-object-server.service` — single-instance object-server unit (one per host; one disk per host in the user-unit layout)
 - `simpler-objects-locator.service` — single-instance locator
 - `simpler-objects-async-replicate.service` / `.timer` — replication job and timer
 - `env/object-server.env.example`, `env/locator.env.example` — per-host configuration
@@ -44,7 +44,7 @@ No `libcurl` headers are required for the server install — `pycurl` is only in
 ### 2. Create the service user
 
 ```
-sudo useradd --system --create-home --shell /usr/sbin/nologin simpler-objects
+sudo useradd --system --create-home --shell /bin/bash simpler-objects
 ```
 
 `--create-home` is required: systemd needs a home directory to write user unit
@@ -195,7 +195,7 @@ For cron-based scheduling instead, see [`../cron/README.md`](../cron/README.md).
 
 ## Post-crash scrub preflight
 
-Every start of `simpler-objects-object-server@<instance>` runs
+Every start of `simpler-objects-object-server` runs
 `simpler_objects.scrub` in dry-run mode against `OBJECT_DIRECTORY` first
 (via `ExecStartPre=`). If a previous hard crash (SIGKILL / power loss) left an
 orphan partial file or a garbled `<bucket>.sha256` line, scrub exits non-zero
