@@ -1,0 +1,34 @@
+# Keep the container build context small — only ship what `pip install .`
+# actually needs (pyproject.toml, README.md, LICENSE, simpler_objects/).
+**/__pycache__/
+**/*.py[codz]
+*.egg-info/
+
+# Repo metadata
+.git/
+.gitignore
+.github/
+
+# Tests, demos, docs not needed in the image
+tests/
+upload-behavior-demo/
+deploy/
+openapi*.json
+openapi*.yaml
+review-*.md
+*.tmp
+CLAUDE.md
+CLAUDE.md.tmp
+perf_test.sh
+migrate_checksums.sh
+
+# Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+
+# Editor cruft
+*.swp
+.vscode/
+.idea/

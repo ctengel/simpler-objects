@@ -114,6 +114,10 @@ Note that ObjectIndex has a legacy way to manage this. Simply move your old file
 - run in screen
 - change `fastapi dev` to `fastapi run` for prod
 
+## Container (locator)
+
+The locator is stateless and ships an OCI image at [`deploy/container/`](deploy/container/). Build with `podman build -t simpler-objects-locator -f deploy/container/Containerfile .` and run with `-e OBJECT_SERVERS=...`. Object servers stay on systemd-managed bare metal because they need a persistent disk mount — see the deploy README for the rationale.
+
 ## Client guidance
 
 ### Redirects (307)
