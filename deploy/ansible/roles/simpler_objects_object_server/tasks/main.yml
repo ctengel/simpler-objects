@@ -1,38 +1,73 @@
 ---
-- name: Fail early if no object_server_instances declared
+- name: Fail early if object_directory not declared
   ansible.builtin.assert:
-    that: object_server_instances is defined and object_server_instances | length > 0
-    fail_msg: >
-      No `object_server_instances` declared for this host. Add at least one
-      entry with `name` and `object_directory` in inventory.
+    that: object_directory is defined
+    fail_msg: "Set `object_directory` for this host in inventory."
   tags: [config]
 
-- name: Ensure /etc/simpler-objects exists
-  ansible.builtin.file:
-    path: "{{ simpler_objects_etc }}"
-    state: directory
-    owner: root
-    group: "{{ simpler_objects_group }}"
-    mode: "0750"
+- name: Verify object_directory is writable
+  ansible.builtin.command:
+    cmd: "test -w {{ object_directory | quote }}"
+  changed_when: false
+  register: _so_dir_check
+  failed_when: _so_dir_check.rc != 0
   tags: [config]
 
-- name: Install object-server template unit
+- name: Install object-server unit
   ansible.builtin.copy:
-    src: "{{ role_path }}/../../../systemd/{{ object_server_unit_filename }}"
-    dest: "{{ simpler_objects_systemd_unit_dir }}/{{ object_server_unit_filename }}"
-    owner: root
-    group: root
+    src: "{{ role_path }}/../../../systemd/simpler-objects-object-server.service"
+    dest: "{{ simpler_objects_systemd_user_dir }}/simpler-objects-object-server.service"
     mode: "0644"
-  notify: simpler_objects_object_server_daemon_reload
+  register: _so_unit
   tags: [unit]
 
-- name: Flush handlers so the unit is registered before we enable instances
-  ansible.builtin.meta: flush_handlers
+- name: Render env file
+  ansible.builtin.template:
+    src: object-server.env.j2
+    dest: "{{ simpler_objects_config_dir }}/object-server.env"
+    mode: "0600"
+  register: _so_env_file
+  tags: [config]
 
-- name: Configure each object-server instance
-  ansible.builtin.include_tasks: instance.yml
-  loop: "{{ object_server_instances }}"
-  loop_control:
-    loop_var: instance
-    label: "{{ instance.name }}"
+- name: Ensure drop-in directory exists
+  ansible.builtin.file:
+    path: "{{ simpler_objects_systemd_user_dir }}/simpler-objects-object-server.service.d"
+    state: directory
+    mode: "0755"
+  tags: [config]
+
+- name: Set RequiresMountsFor drop-in
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      RequiresMountsFor={{ object_directory }}
+    dest: "{{ simpler_objects_systemd_user_dir }}/simpler-objects-object-server.service.d/mount.conf"
+    mode: "0644"
+  register: _so_override
+  tags: [config]
+
+- name: Reload systemd user daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+  tags: [config, unit]
+
+- name: Enable and start object-server
+  ansible.builtin.systemd:
+    name: simpler-objects-object-server.service
+    enabled: true
+    state: started
+    scope: user
+  tags: [config, update]
+
+- name: Restart on env, drop-in, unit, or venv change
+  ansible.builtin.systemd:
+    name: simpler-objects-object-server.service
+    state: restarted
+    scope: user
+  when: >
+    (_so_env_file is changed)
+    or (_so_override is changed)
+    or (_so_unit is changed)
+    or (simpler_objects_venv_updated | default(false) | bool)
   tags: [config, update]

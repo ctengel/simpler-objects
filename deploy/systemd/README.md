@@ -1,9 +1,14 @@
 # systemd deployment
 
-Production deployment of `simpler-objects` via systemd. The repo ships:
+Production deployment of `simpler-objects` via systemd user units. Services
+run entirely under the service account — no root involvement after the
+one-time prerequisites are done.
+
+The repo ships:
 
 - `simpler-objects-object-server@.service` — template unit, one instance per attached disk
 - `simpler-objects-locator.service` — single-instance locator
+- `simpler-objects-async-replicate.service` / `.timer` — replication job and timer
 - `env/object-server.env.example`, `env/locator.env.example` — per-host configuration
 
 > Driving a fleet of Pis? An Ansible playbook that wraps this entire walkthrough
@@ -16,159 +21,155 @@ Production deployment of `simpler-objects` via systemd. The repo ships:
 - Fedora
 - Raspberry Pi OS (trixie; or bookworm with Python 3.12 manually installed)
 
-## Install the package
+---
 
-The unit files expect the package installed into a venv at `/opt/simpler-objects/venv`. If you put it elsewhere, override the `ExecStart=` path with a drop-in (`systemctl edit <unit>`).
+## Prerequisites (run once as root)
 
-### Fedora
+These steps require root. Everything after this section runs as the service user.
 
+### 1. Install OS packages
+
+**Fedora:**
 ```
 sudo dnf install -y python3 python3-venv git
-sudo mkdir -p /opt/simpler-objects
-sudo python3 -m venv /opt/simpler-objects/venv
-sudo /opt/simpler-objects/venv/bin/pip install \
-    git+https://github.com/ctengel/simpler-objects@v0.4.0
 ```
 
-### Raspberry Pi OS
-
+**Raspberry Pi OS / Debian:**
 ```
-sudo apt update
-sudo apt install -y python3 python3-venv git
-sudo mkdir -p /opt/simpler-objects
-sudo python3 -m venv /opt/simpler-objects/venv
-sudo /opt/simpler-objects/venv/bin/pip install \
-    git+https://github.com/ctengel/simpler-objects@v0.4.0
+sudo apt update && sudo apt install -y python3 python3-venv git
 ```
 
 No `libcurl` headers are required for the server install — `pycurl` is only in the optional `[client]` extra.
 
-## Create the service user
+### 2. Create the service user
 
 ```
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin simpler-objects
+sudo useradd --system --create-home --shell /usr/sbin/nologin simpler-objects
 ```
+
+`--create-home` is required: systemd needs a home directory to write user unit
+state and to expand the `%h` specifier in the unit files.
+
+### 3. Mount the storage disk and hand off ownership
+
+Mount the disk via `/etc/fstab` (use a UUID or label, not `/dev/sdX`). Then
+create and chown the data subdirectory to the service user:
+
+```
+sudo mkdir -p /mnt/extusb-a/simpler-objects/data
+sudo chown simpler-objects:simpler-objects /mnt/extusb-a/simpler-objects/data
+```
+
+The service user only needs ownership of the data subdirectory — not the
+mountpoint itself.
+
+### 4. Enable linger
+
+Linger allows the service user's systemd session — and therefore its units —
+to run without an active login session:
+
+```
+sudo loginctl enable-linger simpler-objects
+```
+
+---
+
+## Install the package
+
+Switch to the service user for all remaining steps:
+
+```
+sudo -u simpler-objects -s
+```
+
+Create a venv in the service user's home directory and install the package:
+
+```
+python3 -m venv ~/venv
+~/venv/bin/pip install git+https://github.com/ctengel/simpler-objects@v0.4.0
+```
+
+---
 
 ## Object server (Raspberry Pi storage node)
 
-### Mount-path convention
+### Wire up the object server
 
-Each instance's storage **must** be mounted at `/srv/simpler-objects/<instance>`. The unit's `RequiresMountsFor=/srv/simpler-objects/%i` encodes this, so the service won't start until the disk is mounted — which is the whole point on a Pi with an external USB drive that may not be ready when networking comes up.
-
-If your mount lives elsewhere, use a per-instance drop-in. See "Non-standard mount paths" below for the full recipe.
-
-### Wire up an instance
-
-For each attached disk (e.g. `disk1`, `disk2`):
-
-1. Mount it at `/srv/simpler-objects/disk1` via `/etc/fstab` (this is the part you get to design — make sure the device is identified by UUID or label, not by `/dev/sda1`).
-2. `sudo chown -R simpler-objects:simpler-objects /srv/simpler-objects/disk1`
-3. Copy the example env file and edit it:
+1. Copy and edit the env file:
 
    ```
-   sudo install -d -m 0750 -o root -g simpler-objects /etc/simpler-objects
-   sudo install -m 0640 -o root -g simpler-objects \
-       deploy/systemd/env/object-server.env.example \
-       /etc/simpler-objects/object-server-disk1.env
-   sudoedit /etc/simpler-objects/object-server-disk1.env
+   mkdir -p ~/.config/simpler-objects
+   cp deploy/systemd/env/object-server.env.example \
+       ~/.config/simpler-objects/object-server.env
+   $EDITOR ~/.config/simpler-objects/object-server.env
    ```
 
-   Each instance gets its own env file. The `<instance>` token in the filename must match the `@<instance>` in the systemctl command.
-4. Install the unit and start the service:
+   Set `OBJECT_DIRECTORY` to the data path chowned in the prerequisites (e.g.
+   `/mnt/extusb-a/simpler-objects/data`).
+
+2. Install the unit and create the `RequiresMountsFor=` drop-in:
 
    ```
-   sudo install -m 0644 deploy/systemd/simpler-objects-object-server@.service \
-       /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now simpler-objects-object-server@disk1
-   sudo systemctl status simpler-objects-object-server@disk1
+   mkdir -p ~/.config/systemd/user
+   cp deploy/systemd/simpler-objects-object-server.service ~/.config/systemd/user/
+
+   # Drop-in so systemd waits for the disk before starting the service
+   mkdir -p ~/.config/systemd/user/simpler-objects-object-server.service.d
+   cat > ~/.config/systemd/user/simpler-objects-object-server.service.d/mount.conf <<'EOF'
+   [Unit]
+   RequiresMountsFor=/mnt/extusb-a/simpler-objects/data
+   EOF
+
+   systemctl --user daemon-reload
+   systemctl --user enable --now simpler-objects-object-server
+   systemctl --user status simpler-objects-object-server
    ```
-
-5. Repeat steps 1–3 for `disk2`, `disk3`, etc; the same unit template handles them all.
-
-### Non-standard mount paths
-
-If you can't (or don't want to) mount storage at `/srv/simpler-objects/<instance>` — for example, you already mount your external USB drive at `/mnt/extusb` and want to keep object data at `/mnt/extusb/simplerobjectsdata` — override the three coupled settings with a per-instance drop-in:
-
-```
-sudo systemctl edit simpler-objects-object-server@disk1
-```
-
-```ini
-[Unit]
-RequiresMountsFor=
-RequiresMountsFor=/mnt/extusb/simplerobjectsdata
-
-[Service]
-ReadWritePaths=
-ReadWritePaths=/mnt/extusb/simplerobjectsdata
-```
-
-Then in `/etc/simpler-objects/object-server-disk1.env`:
-
-```
-OBJECT_DIRECTORY=/mnt/extusb/simplerobjectsdata
-```
-
-The empty `RequiresMountsFor=` / `ReadWritePaths=` lines are required: without them systemd *appends* the drop-in values to the originals, leaving you with both `/srv/simpler-objects/disk1` (from the base unit) and `/mnt/extusb/simplerobjectsdata` (from the drop-in) — half-broken.
-
-`RequiresMountsFor=` accepts paths *inside* a mount; systemd walks up and finds the deepest covering mount unit, so passing the data directory works as well as passing the mountpoint itself.
-
-After editing, reload and restart:
-
-```
-sudo systemctl daemon-reload
-sudo systemctl restart simpler-objects-object-server@disk1
-```
 
 ### Worker count
 
-Default is 1. To raise it, set `WORKERS=` in the env file (e.g. `WORKERS=4` on a busy node). `object_server.py`'s kernel-level flock + `O_CREAT|O_EXCL` + `O_APPEND` semantics make multi-worker safe across processes sharing the same `OBJECT_DIRECTORY`.
+Default is 1. To raise it, set `WORKERS=` in the env file. The kernel-level
+`flock` + `O_CREAT|O_EXCL` + `O_APPEND` semantics make multi-worker safe
+across processes sharing the same `OBJECT_DIRECTORY`.
+
+---
 
 ## Locator
 
-Single instance — no template:
-
 ```
-sudo install -d -m 0750 -o root -g simpler-objects /etc/simpler-objects
-sudo install -m 0640 -o root -g simpler-objects \
-    deploy/systemd/env/locator.env.example \
-    /etc/simpler-objects/locator.env
-sudoedit /etc/simpler-objects/locator.env
+mkdir -p ~/.config/simpler-objects ~/.config/systemd/user
+cp deploy/systemd/env/locator.env.example ~/.config/simpler-objects/locator.env
+$EDITOR ~/.config/simpler-objects/locator.env
 
-sudo install -m 0644 deploy/systemd/simpler-objects-locator.service \
-    /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now simpler-objects-locator
+cp deploy/systemd/simpler-objects-locator.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now simpler-objects-locator
 ```
 
-Set `OBJECT_SERVERS=` in the env file to the comma-separated list of object servers (trailing slashes required).
+Set `OBJECT_SERVERS=` in the env file to the comma-separated list of object
+server URLs (trailing slashes required).
 
-The shipped unit runs as the `simpler-objects` user for install-time consistency with the object server. The locator is stateless and could equally run with `DynamicUser=yes`; flip it via a drop-in if you prefer.
+---
 
 ## Scheduled replication
 
-`simpler-objects-async-replicate.service` and its paired timer run `async_replicate` periodically across all configured buckets. Bucket names and replica counts come from `/etc/simpler-objects/async-replicate.env`.
-
-### Install
-
 ```
-sudo install -d -m 0750 -o root -g simpler-objects /etc/simpler-objects
-sudo install -m 0640 -o root -g simpler-objects \
-    deploy/systemd/env/async-replicate.env.example \
-    /etc/simpler-objects/async-replicate.env
-sudoedit /etc/simpler-objects/async-replicate.env   # set LOCATOR_URL, BUCKETS, REPLICAS
+mkdir -p ~/.config/simpler-objects ~/.config/systemd/user
+cp deploy/systemd/env/async-replicate.env.example \
+    ~/.config/simpler-objects/async-replicate.env
+$EDITOR ~/.config/simpler-objects/async-replicate.env   # set LOCATOR_URL, BUCKETS, REPLICAS
 
-sudo install -m 0644 deploy/systemd/simpler-objects-async-replicate.service \
-    deploy/systemd/simpler-objects-async-replicate.timer \
-    /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now simpler-objects-async-replicate.timer
+cp deploy/systemd/simpler-objects-async-replicate.service \
+   deploy/systemd/simpler-objects-async-replicate.timer \
+   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now simpler-objects-async-replicate.timer
 ```
 
 ### Per-bucket replica overrides
 
-In `/etc/simpler-objects/async-replicate.env`, add a `REPLICAS_<UPPERCASE_BUCKET>=N` line for each bucket that differs from the default `REPLICAS`:
+In `~/.config/simpler-objects/async-replicate.env`, add a
+`REPLICAS_<UPPERCASE_BUCKET>=N` line for each bucket that differs from the
+default `REPLICAS`:
 
 ```
 BUCKETS=photos backups archive
@@ -180,44 +181,66 @@ REPLICAS_ARCHIVE=1
 ### Run once manually
 
 ```
-sudo systemctl start simpler-objects-async-replicate.service
-journalctl -u simpler-objects-async-replicate.service -n 50
+systemctl --user start simpler-objects-async-replicate.service
+journalctl --user -u simpler-objects-async-replicate.service -n 50
 ```
 
-`simpler-objects-async-replicate` exits non-zero if any object in any bucket couldn't be replicated (out of space, locator unreachable, source unavailable). systemd records the failure but does not retry until the next timer firing — that's the intended behaviour. If you want the locator on the same host as the replicator to come up first, the unit file comments show the drop-in.
-
-`Type=oneshot` prevents concurrent runs: if the hourly timer fires while a previous run is still active, systemd queues the new start and runs it back-to-back after the first finishes. For this idempotent job that is harmless — the second run finds replicas already satisfied and exits quickly.
+`Type=oneshot` prevents concurrent runs: if the hourly timer fires while a
+previous run is still active, systemd queues the new start and runs it
+back-to-back after the first finishes.
 
 For cron-based scheduling instead, see [`../cron/README.md`](../cron/README.md).
 
+---
+
 ## Post-crash scrub preflight
 
-Every start of `simpler-objects-object-server@<instance>` runs `simpler_objects.scrub` in dry-run mode against `OBJECT_DIRECTORY` first (via `ExecStartPre=`). If a previous hard crash (SIGKILL / power loss) left an orphan partial file at a key path or a garbled `<bucket>.sha256` line, scrub exits non-zero and the unit refuses to start — restarting blindly on top of a dirty directory is exactly what we want to prevent.
+Every start of `simpler-objects-object-server@<instance>` runs
+`simpler_objects.scrub` in dry-run mode against `OBJECT_DIRECTORY` first
+(via `ExecStartPre=`). If a previous hard crash (SIGKILL / power loss) left an
+orphan partial file or a garbled `<bucket>.sha256` line, scrub exits non-zero
+and the unit refuses to start.
 
 On a clean directory this is near-instant. The cost scales with file count.
 
 ### Recovering from a scrub failure
 
-`systemctl status` shows the unit in `failed` state. The scrub output (what was found, which files) is in the journal:
+`systemctl --user status` shows the unit in `failed` state. The scrub output
+is in the journal:
 
 ```
-sudo journalctl -u simpler-objects-object-server@disk1 -n 50
+journalctl --user -u simpler-objects-object-server -n 50
 ```
 
-Inspect the `crash-victim:`, `stale-entry:`, and `garbled-line:` lines, then run scrub with the cleanup flags as the service user:
+Inspect the `crash-victim:`, `stale-entry:`, and `garbled-line:` lines, then
+run scrub with the cleanup flags:
 
 ```
-sudo -u simpler-objects /opt/simpler-objects/venv/bin/python \
-    -m simpler_objects.scrub --delete-victims --repair-checksums /srv/simpler-objects/disk1
-sudo systemctl reset-failed simpler-objects-object-server@disk1.service
-sudo systemctl start simpler-objects-object-server@disk1.service
+~/venv/bin/python -m simpler_objects.scrub \
+    --delete-victims --repair-checksums /mnt/extusb-a/simpler-objects/data
+systemctl --user reset-failed simpler-objects-object-server.service
+systemctl --user start simpler-objects-object-server.service
 ```
 
-`reset-failed` is required because systemd's start-limit kicks in after repeated `ExecStartPre` failures; without it the next `start` is a no-op.
+`reset-failed` is required because systemd's start-limit kicks in after
+repeated `ExecStartPre` failures.
+
+---
 
 ## Operations
 
-- Logs: `journalctl -u simpler-objects-object-server@disk1 -f`, `journalctl -u simpler-objects-locator -f`
-- Reload after editing an env file: `sudo systemctl restart simpler-objects-object-server@disk1`
-- List all running instances: `systemctl list-units 'simpler-objects-*'`
-- Health check: `curl http://<host>:29164/health` (locator) or `curl http://<host>:29171/health` (object server)
+```
+# Logs
+journalctl --user -u simpler-objects-object-server -f
+journalctl --user -u simpler-objects-locator -f
+
+# Restart after editing an env file
+systemctl --user restart simpler-objects-object-server
+
+# List running simpler-objects units
+systemctl --user list-units 'simpler-objects-*'
+
+# Health check
+curl http://<host>:29164/health        # locator
+curl http://<host>:29171/health        # object server
+```

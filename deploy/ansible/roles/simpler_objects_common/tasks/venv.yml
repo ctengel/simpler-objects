@@ -3,8 +3,6 @@
   ansible.builtin.command:
     cmd: "python3 -m venv {{ simpler_objects_venv }}"
     creates: "{{ simpler_objects_venv }}/bin/python"
-  become: true
-  become_user: "{{ simpler_objects_user }}"
 
 # We track the installed git ref in a marker file because pip's idempotency
 # is unreliable with git+URLs: a `pip install git+...@v0.4.0` followed by
@@ -23,8 +21,6 @@
     name: "git+{{ simpler_objects_git_url }}@{{ simpler_objects_version }}"
     state: forcereinstall
     virtualenv: "{{ simpler_objects_venv }}"
-  become: true
-  become_user: "{{ simpler_objects_user }}"
   register: _so_pip_install
   when: >
     simpler_objects_force_reinstall | bool
@@ -35,11 +31,7 @@
   ansible.builtin.copy:
     dest: "{{ simpler_objects_venv }}/.simpler-objects.installed-ref"
     content: "{{ simpler_objects_version }}\n"
-    owner: "{{ simpler_objects_user }}"
-    group: "{{ simpler_objects_group }}"
     mode: "0644"
-  become: true
-  become_user: "{{ simpler_objects_user }}"
 
 # Signal to later plays (object_server, locator) that the venv was just
 # refreshed so they restart their units. Handler-based notification can't

@@ -1,19 +1,3 @@
 ---
-# Per-instance defaults. Each entry in `object_server_instances` may override.
 object_server_default_port: 29171
 object_server_default_workers: 1
-object_server_default_read_only: false
-
-# Config directory layout (matches deploy/systemd/README.md).
-simpler_objects_etc: /etc/simpler-objects
-simpler_objects_systemd_unit_dir: /etc/systemd/system
-
-# Source unit file inside this repo. Path is relative to the role's
-# `files/`/`templates/` resolution; we use an absolute path off the playbook
-# root via the `role_path` magic var. See tasks/main.yml.
-object_server_unit_filename: simpler-objects-object-server@.service
-
-# Service user/group — kept in sync with simpler_objects_common/defaults/main.yml.
-# Each role has its own copy so it works in any single-role play.
-simpler_objects_user: simpler-objects
-simpler_objects_group: simpler-objects

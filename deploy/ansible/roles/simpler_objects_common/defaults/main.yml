@@ -4,14 +4,13 @@
 simpler_objects_version: v0.4.0
 simpler_objects_git_url: https://github.com/ctengel/simpler-objects
 
-# Install layout. The systemd units in ../../../systemd/ hardcode this venv
-# path; override with a drop-in (`systemctl edit <unit>`) if you change it.
-simpler_objects_install_root: /opt/simpler-objects
-simpler_objects_venv: "{{ simpler_objects_install_root }}/venv"
+# Install layout. The systemd units use %h/venv as the default venv path;
+# override with a drop-in (`systemctl --user edit <unit>`) if you change it.
+simpler_objects_venv: "{{ ansible_env.HOME }}/venv"
 
-# Service user/group (also referenced by unit files).
-simpler_objects_user: simpler-objects
-simpler_objects_group: simpler-objects
+# Config and unit directories (matches %E and %h/.config/systemd/user in unit files).
+simpler_objects_config_dir: "{{ ansible_env.HOME }}/.config/simpler-objects"
+simpler_objects_systemd_user_dir: "{{ ansible_env.HOME }}/.config/systemd/user"
 
 # Force `pip install` to reinstall even when the requirement is already
 # satisfied (handy for recovering a corrupted venv). Pass as

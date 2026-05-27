@@ -4,37 +4,28 @@ Documentation=https://github.com/ctengel/simpler-objects
 After=network-online.target
 Wants=network-online.target
 # If you run the locator on the same host and want to wait for it, add via
-# `systemctl edit simpler-objects-async-replicate`:
+# `systemctl --user edit simpler-objects-async-replicate`:
 #   [Unit]
 #   After=simpler-objects-locator.service
 #   Wants=simpler-objects-locator.service
 
 [Service]
 Type=oneshot
-EnvironmentFile=/etc/simpler-objects/async-replicate.env
-User=simpler-objects
-Group=simpler-objects
+EnvironmentFile=%E/simpler-objects/async-replicate.env
 
 # Defaults; values in the env file override these.
 Environment=LOCATOR_URL=http://localhost:29164/
 Environment=REPLICAS=2
-# BUCKETS must be set in /etc/simpler-objects/async-replicate.env.
+# BUCKETS must be set in ~/.config/simpler-objects/async-replicate.env.
 # Per-bucket replica overrides use REPLICAS_<UPPERCASE_BUCKET> (e.g. REPLICAS_BACKUPS=3).
 
-# Adjust the venv path to wherever you installed the package.
-ExecStart=/opt/simpler-objects/venv/bin/simpler-objects-async-replicate ${LOCATOR_URL}
+# Adjust the venv path with a drop-in if you installed elsewhere.
+ExecStart=%h/venv/bin/simpler-objects-async-replicate ${LOCATOR_URL}
 
-# Sandboxing (no ReadWritePaths — the replicator streams server-to-server)
+# Sandboxing (subset compatible with user units)
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
 RestrictRealtime=true

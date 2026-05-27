@@ -13,24 +13,20 @@
 
 - name: Install simpler-objects venv on every managed host
   hosts: object_servers:locators:replicators
-  become: true
   roles:
     - simpler_objects_common
 
 - name: Configure object server instances
   hosts: object_servers
-  become: true
   roles:
     - simpler_objects_object_server
 
 - name: Configure locator
   hosts: locators
-  become: true
   roles:
     - simpler_objects_locator
 
 - name: Configure async-replication timer
   hosts: replicators
-  become: true
   roles:
     - simpler_objects_async_replicate

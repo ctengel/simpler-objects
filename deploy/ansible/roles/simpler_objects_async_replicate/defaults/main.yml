@@ -5,12 +5,3 @@ replicate_replicas: 2
 # replicate_buckets: []
 # Optional dict of per-bucket overrides — keys are bucket names (any case).
 replicate_replicas_overrides: {}
-
-simpler_objects_etc: /etc/simpler-objects
-simpler_objects_systemd_unit_dir: /etc/systemd/system
-async_replicate_service_filename: simpler-objects-async-replicate.service
-async_replicate_timer_filename: simpler-objects-async-replicate.timer
-
-# Service user/group — kept in sync with simpler_objects_common/defaults/main.yml.
-simpler_objects_user: simpler-objects
-simpler_objects_group: simpler-objects

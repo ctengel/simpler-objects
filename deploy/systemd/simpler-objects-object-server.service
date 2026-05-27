@@ -1,0 +1,42 @@
+[Unit]
+Description=Simpler Objects object server
+Documentation=https://github.com/ctengel/simpler-objects
+After=network-online.target
+Wants=network-online.target
+# RequiresMountsFor must be set via a drop-in pointing at the disk mount path.
+# The Ansible role does this automatically. For manual setup:
+#   systemctl --user edit simpler-objects-object-server
+# and add:
+#   [Unit]
+#   RequiresMountsFor=/path/to/mount
+
+[Service]
+Type=exec
+EnvironmentFile=%E/simpler-objects/object-server.env
+
+# Defaults; values in the env file override these.
+Environment=HOST=0.0.0.0
+Environment=PORT=29171
+Environment=WORKERS=1
+
+# Refuse to start if a previous crash left orphan partial files or a garbled
+# checksum file. Dry-run only — operator must run scrub with --delete-victims
+# and/or --repair-checksums to clean up, then `systemctl --user reset-failed`.
+ExecStartPre=%h/venv/bin/python -m simpler_objects.scrub ${OBJECT_DIRECTORY}
+
+# Adjust the venv path with a drop-in if you installed elsewhere.
+ExecStart=%h/venv/bin/uvicorn simpler_objects.object_server:app --host ${HOST} --port ${PORT} --workers ${WORKERS}
+
+Restart=on-failure
+RestartSec=5s
+
+# Sandboxing (subset compatible with user units)
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=default.target

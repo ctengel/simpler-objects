@@ -3,7 +3,7 @@
 # Copy this to inventory/hosts.yml and edit. Three groups drive the three
 # roles in site.yml:
 #
-#   object_servers — Pis with attached disks that hold object data
+#   object_servers — hosts with an attached disk that hold object data
 #   locators       — host(s) running the cluster coordinator
 #   replicators    — host running the async-replication timer (often == locator)
 #
@@ -13,6 +13,9 @@
 
 all:
   vars:
+    # Connect as the service user — the playbook needs no root or sudo.
+    ansible_user: simpler-objects
+
     # The one knob you change to upgrade. The playbook pins the package to
     # this git tag; bump and re-run with `--tags update` to upgrade.
     simpler_objects_version: v0.4.0
@@ -22,35 +25,22 @@ all:
     object_servers:
       hosts:
         pi-storage-1.lan:
-          object_server_instances:
-            # One entry per attached disk. `name` is the systemctl instance
-            # token (`@disk1` etc.); `object_directory` is the bucket parent
-            # directory — anywhere on the filesystem; the role generates the
-            # per-instance drop-in that points RequiresMountsFor= /
-            # ReadWritePaths= at it.
-            - name: disk1
-              object_directory: /mnt/extusb-a/simpler-objects/data
-              # Optional knobs (defaults shown):
-              # read_only: false      # set true for a read-only mirror node
-              # port: 29171
-              # workers: 1
-
-            - name: disk2
-              object_directory: /mnt/extusb-b/simpler-objects/data
-              read_only: true        # RO mirror
-              port: 29172            # alternate port on the same host
+          # Path to the bucket parent directory on the attached disk.
+          # The directory must already be owned by the service user (root prereq).
+          object_directory: /mnt/extusb-a/simpler-objects/data
+          # Optional knobs (defaults shown):
+          # object_server_read_only: false
+          # object_server_port: 29171
+          # object_server_workers: 1
 
         pi-storage-2.lan:
-          object_server_instances:
-            - name: disk1
-              object_directory: /mnt/usb1/simpler-objects/data
+          object_directory: /mnt/usb1/simpler-objects/data
 
     locators:
       hosts:
         pi-coord.lan:
           locator_object_servers:
             - http://pi-storage-1.lan:29171/
-            - http://pi-storage-1.lan:29172/
             - http://pi-storage-2.lan:29171/
           # Optional:
           # locator_port: 29164

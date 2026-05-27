@@ -1,9 +1,9 @@
 # Ansible-lint configuration for deploy/ansible/.
 #
 # We disable var-naming[no-role-prefix] deliberately: user-facing inventory
-# variables (object_server_instances, locator_object_servers, replicate_buckets,
-# etc.) are kept short for ergonomics. The roles in this tree are tightly
-# coupled and meant to be used together via site.yml, not as drop-ins to
-# arbitrary external playbooks where prefix collisions would matter.
+# variables (object_directory, locator_object_servers, replicate_buckets, etc.)
+# are kept short for ergonomics. The roles in this tree are tightly coupled
+# and meant to be used together via site.yml, not as drop-ins to arbitrary
+# external playbooks where prefix collisions would matter.
 skip_list:
   - var-naming[no-role-prefix]

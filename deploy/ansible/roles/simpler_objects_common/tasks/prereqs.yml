@@ -1,0 +1,28 @@
+---
+# OS package installation and user setup are root prerequisites — these tasks
+# only verify the required binaries and linger are in place.
+# See deploy/systemd/README.md "Prerequisites" for the one-time root commands.
+
+- name: Assert python3 is available
+  ansible.builtin.command: python3 --version
+  changed_when: false
+  tags: [packages, install]
+
+- name: Assert python3 venv module is available
+  ansible.builtin.command: python3 -m venv --help
+  changed_when: false
+  tags: [packages, install]
+
+- name: Assert git is available
+  ansible.builtin.command: git --version
+  changed_when: false
+  tags: [packages, install]
+
+- name: Assert loginctl linger is enabled for this user
+  ansible.builtin.stat:
+    path: "/var/lib/systemd/linger/{{ ansible_user_id }}"
+  register: _linger_stat
+  changed_when: false
+  failed_when: not _linger_stat.stat.exists
+  tags: [user, install]
+  # If this fails, run once as root: loginctl enable-linger {{ ansible_user_id }}

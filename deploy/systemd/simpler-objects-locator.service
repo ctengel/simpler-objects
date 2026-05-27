@@ -6,35 +6,26 @@ Wants=network-online.target
 
 [Service]
 Type=exec
-EnvironmentFile=/etc/simpler-objects/locator.env
-User=simpler-objects
-Group=simpler-objects
+EnvironmentFile=%E/simpler-objects/locator.env
 
 # Defaults; values in the env file override these.
 Environment=HOST=0.0.0.0
 Environment=PORT=29164
 Environment=WORKERS=1
 
-# Adjust the venv path to wherever you installed the package.
-ExecStart=/opt/simpler-objects/venv/bin/uvicorn simpler_objects.locator_api:app --host ${HOST} --port ${PORT} --workers ${WORKERS}
+# Adjust the venv path with a drop-in if you installed elsewhere.
+ExecStart=%h/venv/bin/uvicorn simpler_objects.locator_api:app --host ${HOST} --port ${PORT} --workers ${WORKERS}
 
 Restart=on-failure
 RestartSec=5s
 
-# Sandboxing (no ReadWritePaths — locator is stateless)
+# Sandboxing (subset compatible with user units)
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
 RestrictRealtime=true
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
