@@ -195,17 +195,19 @@ def simple_upload(filename, url, file_mime, checksum_val=None):
 
 Clients may send `Content-Digest` or `Repr-Digest` with a SHA-256 value (`sha-256=:base64:` format) for integrity verification. The object server returns `400` on mismatch. The `Repr-Digest` header on GET/HEAD responses is present only when a checksum record exists for the object — do not assume it is always included.
 
-### Changes in spec v0.2.0
+### Recentish changes in spec v0.2->v0.4
+
+Since ec8abf9e34b8f5a6b7a25c463c29f71bb2988f91 (February 2026)
 
 - **`HEAD /{bucket}/` on the locator** is now supported (previously returned `405`). Returns `200` if the bucket exists on any server, `404` if none have it, `503` for server errors.
 - **Directory entries in `GET /{bucket}/`** now return `"size": null` instead of `"size": 0`. Use the `"directory": true` field to identify directories rather than testing `size == 0`.
-
-### Changes in spec v0.4.0
-
 - **`Content-Length` is now required on `PUT /{bucket}/{key}`** (locator only). Previously the locator assumed 1 GiB when `Content-Length` was absent; it now returns `411 Length Required`. The object server already required it.
-
-### Changes in spec v0.3.0
-
+- **`Content-Length` mismatch on `PUT`** now returns `400` (object server). Previously a bare `assert` returned `500` and left a partial file at the key path, causing every subsequent PUT attempt to return `409`. The partial file is now cleaned up; clients may safely retry with a corrected body.
+- **`Content-Type` mismatch on `PUT`** returns `415 Unsupported Media Type` on both the object server and the locator when the supplied `Content-Type` conflicts with the MIME type implied by the key's file extension. `application/octet-stream` is always accepted; unknown extensions are not checked. Clients that omit `Content-Type` are unaffected.
+- **Concurrent `GET`/`HEAD` during an in-progress `PUT`** now returns `503` with a `Retry-After` header instead of reading a partial object. The object server holds an exclusive lock for the full duration of a PUT; a simultaneous read sees `503` immediately. Clients must handle `503` on read operations and respect `Retry-After`.
+- **`ENOSPC` (disk full) during `PUT`** now returns `507 Insufficient Storage` (object server). Previously propagated as `500`. Clients can now distinguish a full disk from a generic server error.
+- **Path traversal** now returns `404` (object server). Previously returned `400`. Clients checking for `400` as an invalid-path signal should expect `404` instead.
+- **`PUT` returns `405`** when the object server is started with `READ_ONLY=1`. The server also advertises `"write": false` in its `/health` response in this state, so clients checking health before writing can detect it without attempting a PUT.
 - **`/health` response renamed `available` to `quota-available-bytes`** (RFC 4331 alignment) and added a `quota-used-bytes` field. Clients reading the old `available` key will break and must switch to `quota-available-bytes`. This applies to the object server's `/health` body and to each per-server entry under `servers` in the locator's `/health` body.
 - **`GET /`** now returns `403` on both the object server and the locator (previously `404`, as no route existed). Bucket enumeration is intentionally not offered.
 
