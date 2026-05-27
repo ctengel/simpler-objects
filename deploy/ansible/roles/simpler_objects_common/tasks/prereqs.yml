@@ -14,9 +14,11 @@
   tags: [packages, install]
 
 - name: Assert git is available
-  ansible.builtin.command: git --version
+  ansible.builtin.command: git --version  # noqa: command-instead-of-module
   changed_when: false
   tags: [packages, install]
+  # noqa rationale: this is a presence check, not a git operation. Using the
+  # ansible.builtin.git module would require a target repository.
 
 - name: Assert loginctl linger is enabled for this user
   ansible.builtin.stat:
