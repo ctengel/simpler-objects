@@ -44,11 +44,13 @@ No `libcurl` headers are required for the server install — `pycurl` is only in
 ### 2. Create the service user
 
 ```
-sudo useradd --system --create-home --shell /bin/bash simpler-objects
+sudo useradd simpler-objects
 ```
 
-`--create-home` is required: systemd needs a home directory to write user unit
-state and to expand the `%h` specifier in the unit files.
+systemd user units need a home directory (the `%h` specifier in the unit files
+expands to it). On Fedora and Raspberry Pi OS this is created automatically
+by `useradd` via `CREATE_HOME yes` in `/etc/login.defs`; pass `--create-home`
+explicitly if your distro defaults to no.
 
 ### 3. Mount the storage disk and hand off ownership
 

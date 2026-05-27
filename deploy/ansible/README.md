@@ -17,8 +17,10 @@ These steps require root. They only need to be done once.
 # 1. Install OS packages (Debian/Raspberry Pi OS)
 apt update && apt install -y python3 python3-venv git
 
-# 2. Create the service user (--create-home required for systemd user units)
-useradd --system --create-home --shell /bin/bash simpler-objects
+# 2. Create the service user. Home dir is required (systemd user units expand
+#    %h to it); on Fedora and Raspberry Pi OS, useradd creates it by default.
+#    Add --create-home explicitly if your distro defaults to CREATE_HOME no.
+useradd simpler-objects
 
 # 3. (Storage nodes) Mount disks via /etc/fstab, then chown the data subdir
 mkdir -p /mnt/extusb-a/simpler-objects/data
