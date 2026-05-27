@@ -1,0 +1,22 @@
+# Example /etc/cron.d/simpler-objects-reboot entry.
+# Starts the locator and object server at boot via wrapper scripts.
+#
+# Format: @reboot user command
+#
+# Before installing:
+#   1. Copy the wrapper scripts to the service user's ~/bin/ and make executable:
+#        install -m 0755 deploy/cron/locator-start.sh \
+#            /home/simpler-objects/bin/simpler-objects-locator-start
+#        install -m 0755 deploy/cron/object-server-start.sh \
+#            /home/simpler-objects/bin/simpler-objects-object-server-start
+#   2. Edit MOUNT_WAIT_PATH near the top of simpler-objects-object-server-start
+#      to the mount point that contains OBJECT_DIRECTORY (e.g. /mnt/extusb-a).
+#   3. Edit VENV in both scripts if your venv is not at ~/venv.
+#   4. Ensure ~/.config/simpler-objects/locator.env and object-server.env exist.
+#
+# The locator is listed first; most cron daemons fire @reboot entries in order.
+# The mount-wait loop in the object-server script is the actual ordering
+# mechanism for disk readiness.
+
+@reboot   simpler-objects   /home/simpler-objects/bin/simpler-objects-locator-start >> /home/simpler-objects/logs/simpler-objects-locator.log 2>&1
+@reboot   simpler-objects   /home/simpler-objects/bin/simpler-objects-object-server-start >> /home/simpler-objects/logs/simpler-objects-object-server.log 2>&1
