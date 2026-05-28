@@ -11,8 +11,3 @@ simpler_objects_venv: "{{ ansible_env.HOME }}/venv"
 # Config and unit directories (matches %E and %h/.config/systemd/user in unit files).
 simpler_objects_config_dir: "{{ ansible_env.HOME }}/.config/simpler-objects"
 simpler_objects_systemd_user_dir: "{{ ansible_env.HOME }}/.config/systemd/user"
-
-# Force `pip install` to reinstall even when the requirement is already
-# satisfied (handy for recovering a corrupted venv). Pass as
-# `-e simpler_objects_force_reinstall=true` on the CLI.
-simpler_objects_force_reinstall: false

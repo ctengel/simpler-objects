@@ -1,9 +1,8 @@
 ---
 # Top-level play for the simpler-objects stack.
 #
-# One play per role. `simpler_objects_common` runs on every host that serves
-# any role (storage, locator, replicator); the per-service plays then apply
-# the service-specific role on top.
+# One play per service role. Each play includes `simpler_objects_common` (venv
+# install, config/systemd dirs) followed by the service-specific role.
 #
 # Full deploy:
 #     ansible-playbook -i inventory/hosts.yml site.yml
@@ -11,22 +10,20 @@
 # Upgrade only (re-runs pip install and restart handlers):
 #     ansible-playbook -i inventory/hosts.yml site.yml --tags update
 
-- name: Install simpler-objects venv on every managed host
-  hosts: object_servers:locators:replicators
-  roles:
-    - simpler_objects_common
-
-- name: Configure object server instances
+- name: Install and configure object server instances
   hosts: object_servers
   roles:
+    - simpler_objects_common
     - simpler_objects_object_server
 
-- name: Configure locator
+- name: Install and configure locator
   hosts: locators
   roles:
+    - simpler_objects_common
     - simpler_objects_locator
 
-- name: Configure async-replication timer
+- name: Install and configure async-replication timer
   hosts: replicators
   roles:
+    - simpler_objects_common
     - simpler_objects_async_replicate

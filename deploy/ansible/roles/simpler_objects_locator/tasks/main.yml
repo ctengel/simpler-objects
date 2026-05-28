@@ -58,5 +58,5 @@
   when: >
     (_so_locator_env is changed)
     or (_so_locator_unit is changed)
-    or (simpler_objects_venv_updated | default(false) | bool)
+    or (_so_pip_install is changed)
   tags: [config, update]
