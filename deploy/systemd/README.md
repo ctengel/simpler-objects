@@ -31,15 +31,17 @@ These steps require root. Everything after this section runs as the service user
 
 **Fedora:**
 ```
-sudo dnf install -y python3 python3-venv git
+sudo dnf install -y python3 python3-venv
 ```
 
 **Raspberry Pi OS / Debian:**
 ```
-sudo apt update && sudo apt install -y python3 python3-venv git
+sudo apt update && sudo apt install -y python3 python3-venv
 ```
 
-No `libcurl` headers are required for the server install — `pycurl` is only in the optional `[client]` extra.
+The package is installed from a release tarball (below), so `git` is not
+required. No `libcurl` headers are required for the server install either —
+`pycurl` is only in the optional `[client]` extra.
 
 ### 2. Create the service user
 
@@ -88,8 +90,12 @@ Create a venv in the service user's home directory and install the package:
 
 ```
 python3 -m venv ~/venv
-~/venv/bin/pip install git+https://github.com/ctengel/simpler-objects@v0.4.0
+~/venv/bin/pip install \
+    https://github.com/ctengel/simpler-objects/archive/refs/tags/v0.4.4.tar.gz
 ```
+
+(This is the gitless install the Ansible playbook also uses. To upgrade later,
+re-run with a newer tag.)
 
 ---
 

@@ -2,6 +2,9 @@
 locator_port: 29164
 locator_workers: 1
 
+# Unit the shared restart handler (simpler_objects_common) acts on.
+simpler_objects_unit: simpler-objects-locator.service
+
 # `locator_object_servers` must be set per-host in inventory — list of URLs
 # (with trailing slashes; the locator concatenates paths directly).
 # locator_object_servers: []

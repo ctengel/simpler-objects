@@ -7,9 +7,10 @@
 #   locators       — host(s) running the cluster coordinator
 #   replicators    — host running the async-replication timer (often == locator)
 #
-# A host may belong to multiple groups. simpler_objects_common runs on every
-# group, so the venv only gets installed once even when a host serves more
-# than one role.
+# A host may belong to multiple groups (e.g. the locator and replicator often
+# share a host). site.yml runs one play per group, each including
+# simpler_objects_common, so common runs once per group the host is in. That is
+# idempotent — the venv install and asserts are no-ops on the second pass.
 
 all:
   vars:
@@ -17,8 +18,8 @@ all:
     ansible_user: simpler-objects
 
     # The one knob you change to upgrade. The playbook pins the package to
-    # this git tag; bump and re-run with `--tags update` to upgrade.
-    simpler_objects_version: v0.4.0
+    # this git tag; bump it and re-run the playbook to upgrade.
+    simpler_objects_version: v0.4.4
 
   children:
 

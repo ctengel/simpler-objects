@@ -15,7 +15,7 @@ These steps require root. They only need to be done once.
 
 ```bash
 # 1. Install OS packages (Debian/Raspberry Pi OS)
-apt update && apt install -y python3 python3-venv git
+apt update && apt install -y python3 python3-venv
 
 # 2. Create the service user. Home dir is required (systemd user units expand
 #    %h to it); on Fedora and Raspberry Pi OS, useradd creates it by default.
@@ -32,7 +32,8 @@ loginctl enable-linger simpler-objects
 
 ## What this assumes about the target hosts
 
-- Python 3.12+, `python3-venv`, and `git` installed
+- Python 3.12+ and `python3-venv` installed (the package installs from a
+  release tarball, so `git` is not required)
 - The service user exists with a home directory and linger enabled (see Prerequisites)
 - SSH access as the service user (e.g. deploy your SSH key to
   `/home/simpler-objects/.ssh/authorized_keys`)
@@ -75,7 +76,7 @@ The inventory `ansible_user` should be the service user (e.g.
 all:
   vars:
     ansible_user: simpler-objects
-    simpler_objects_version: v0.4.0
+    simpler_objects_version: v0.4.4
 ```
 
 After a real run:
@@ -105,16 +106,16 @@ the playbook exposes:
 
 ## Partial deployment — managing one service only
 
-You don't have to use Ansible for all three services. The four plays in
-`site.yml` each target a single inventory group; any group that's empty or
-absent makes its play a no-op:
+You don't have to use Ansible for all three services. The three plays in
+`site.yml` each target a single inventory group (and each installs the venv on
+its hosts via `simpler_objects_common`); any group that's empty or absent makes
+its play a no-op:
 
 | Play | Targets group    | What it does                                   |
 |------|------------------|------------------------------------------------|
-| #1   | union of all 3   | Install venv on every managed host             |
-| #2   | `object_servers` | Configure per-disk instances                   |
-| #3   | `locators`       | Configure the locator unit                     |
-| #4   | `replicators`    | Configure the async-replicate timer            |
+| #1   | `object_servers` | venv + per-disk object-server instance         |
+| #2   | `locators`       | venv + the locator unit                        |
+| #3   | `replicators`    | venv + the async-replicate timer               |
 
 So if you want Ansible to manage only the object servers — and run the locator
 and/or replication separately (by hand following
@@ -126,7 +127,7 @@ machine, or not at all) — trim your inventory to a single group:
 all:
   vars:
     ansible_user: simpler-objects
-    simpler_objects_version: v0.4.0
+    simpler_objects_version: v0.4.4
   children:
     object_servers:
       hosts:
@@ -144,27 +145,26 @@ And run the same playbook:
 ansible-playbook -i inventory/hosts.yml site.yml
 ```
 
-Plays #3 and #4 will report `(0 hosts)` and move on. `--tags update` works the
-same way against a trimmed inventory.
+The locator and replicator plays will report `(0 hosts)` and move on.
 
 ## Upgrading
 
-Bump `simpler_objects_version` in `inventory/hosts.yml`, then:
+Bump `simpler_objects_version` in `inventory/hosts.yml` and re-run the whole
+playbook:
 
 ```bash
-ansible-playbook -i inventory/hosts.yml site.yml --tags update
+ansible-playbook -i inventory/hosts.yml site.yml
 ```
 
-`--tags update` runs only the pip-install task and the restart handlers. The
-async-replicate timer doesn't need a restart — its next firing uses the new
-venv automatically (`Type=oneshot`).
+pip detects the new tag, reinstalls into the venv, and notifies the restart
+handler so the service comes up on the new code. Every other task is a no-op
+when nothing changed, so the run is safe to repeat. (The async-replicate timer
+isn't restarted — its next firing uses the new venv automatically, since the
+service is `Type=oneshot`.)
 
-To force a reinstall at the same tag (e.g. you suspect a corrupted venv):
-
-```bash
-ansible-playbook -i inventory/hosts.yml site.yml --tags update \
-    -e simpler_objects_force_reinstall=true
-```
+A corrupted venv self-heals: the playbook probes `~/venv` for a loadable `pip`
+and, if a system Python upgrade has broken it, removes and rebuilds it before
+the pip step (issue #73). No manual `rm -rf ~/venv` needed.
 
 ## Privilege model
 
@@ -174,10 +174,9 @@ managed via `systemctl --user`. The only root involvement is the one-time
 prerequisite steps (packages, user creation, disk chown, linger) documented
 above.
 
-The `prereqs.yml` tasks in `simpler_objects_common` assert that the
-prerequisites are in place (python3, python3-venv, git, linger enabled for
-the connecting user) and fail with a clear message if they are not, rather
-than attempting to install them.
+The `simpler_objects_common` role asserts that the prerequisites are in place
+(python3, python3-venv, linger enabled for the connecting user) and fails with
+a clear message if they are not, rather than attempting to install them.
 
 ## Layout
 

@@ -1,3 +1,6 @@
 ---
 object_server_port: 29171
 object_server_workers: 1
+
+# Unit the shared restart handler (simpler_objects_common) acts on.
+simpler_objects_unit: simpler-objects-object-server.service

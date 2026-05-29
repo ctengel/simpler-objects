@@ -1,0 +1,18 @@
+---
+# Shared handlers. `simpler_objects_common` is included in every play, so these
+# are available to the service role loaded alongside it. The service role sets
+# `simpler_objects_unit` to name the unit it owns.
+#
+# `Reload` is defined before `Restart` so a changed unit file is reloaded into
+# systemd before the unit is restarted.
+
+- name: Reload systemd user daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+
+- name: Restart simpler-objects service
+  ansible.builtin.systemd:
+    name: "{{ simpler_objects_unit }}"
+    state: restarted
+    scope: user

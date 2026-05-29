@@ -1,5 +1,10 @@
 ---
 replicate_locator_url: http://localhost:29164/
+
+# Unit the shared restart handler (simpler_objects_common) acts on. Replication
+# is a Type=oneshot service driven by a timer; a venv upgrade is picked up on the
+# next timer fire, so the "restart" here just reloads the timer unit.
+simpler_objects_unit: simpler-objects-async-replicate.timer
 replicate_replicas: 2
 # `replicate_buckets` (list) must be set per-host in inventory.
 # replicate_buckets: []

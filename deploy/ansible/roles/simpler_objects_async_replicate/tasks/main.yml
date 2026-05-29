@@ -8,14 +8,14 @@
       `replicate_buckets` must be set on the replicator host — list of bucket
       names to replicate.
     quiet: true
-  tags: [config]
 
 - name: Render async-replicate env file
   ansible.builtin.template:
     src: async-replicate.env.j2
     dest: "{{ simpler_objects_config_dir }}/async-replicate.env"
     mode: "0600"
-  tags: [config]
+  # No restart notify: the service is Type=oneshot driven by the timer; the next
+  # firing reads the updated env file.
 
 - name: Install async-replicate service and timer units
   ansible.builtin.copy:
@@ -25,13 +25,7 @@
   loop:
     - simpler-objects-async-replicate.service
     - simpler-objects-async-replicate.timer
-  tags: [unit]
-
-- name: Reload systemd user daemon
-  ansible.builtin.systemd:
-    daemon_reload: true
-    scope: user
-  tags: [config, unit]
+  notify: Reload systemd user daemon
 
 - name: Enable and start async-replicate timer
   ansible.builtin.systemd:
@@ -39,6 +33,5 @@
     enabled: true
     state: started
     scope: user
-  tags: [config, update]
   # The service is Type=oneshot; we don't restart it here. The timer's next
   # firing picks up the new venv automatically.

@@ -4,26 +4,38 @@
 # One play per service role. Each play includes `simpler_objects_common` (venv
 # install, config/systemd dirs) followed by the service-specific role.
 #
-# Full deploy:
+# Every play sets XDG_RUNTIME_DIR so the `systemctl --user` (scope: user) tasks
+# and handlers can reach the service user's D-Bus instance over Ansible's
+# non-login SSH session. Without it those tasks fail with "Failed to connect to
+# bus." `ansible_user_uid` is a gathered fact (gather_facts is on by default).
+#
+# Deploy or upgrade (idempotent — run the whole playbook either way):
 #     ansible-playbook -i inventory/hosts.yml site.yml
 #
-# Upgrade only (re-runs pip install and restart handlers):
-#     ansible-playbook -i inventory/hosts.yml site.yml --tags update
+# To upgrade, bump simpler_objects_version in the inventory and re-run. pip
+# detects the new tag, reinstalls, and notifies the restart handler; every
+# other task is a no-op when nothing changed.
 
 - name: Install and configure object server instances
   hosts: object_servers
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
   roles:
     - simpler_objects_common
     - simpler_objects_object_server
 
 - name: Install and configure locator
   hosts: locators
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
   roles:
     - simpler_objects_common
     - simpler_objects_locator
 
 - name: Install and configure async-replication timer
   hosts: replicators
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
   roles:
     - simpler_objects_common
     - simpler_objects_async_replicate

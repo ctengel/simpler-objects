@@ -1,7 +1,23 @@
 ---
-- name: Prerequisites check
-  ansible.builtin.import_tasks: prereqs.yml
-  tags: [packages, user, install]
+# Prerequisites are root concerns done once out of band (OS packages, service
+# user, linger) — see deploy/systemd/README.md "Prerequisites". The asserts
+# below only verify they are in place; this role never uses become.
+
+- name: Assert python3 is available
+  ansible.builtin.command: python3 --version
+  changed_when: false
+
+- name: Assert python3 venv module is available
+  ansible.builtin.command: python3 -m venv --help
+  changed_when: false
+
+- name: Assert loginctl linger is enabled for this user
+  ansible.builtin.stat:
+    path: "/var/lib/systemd/linger/{{ ansible_user_id }}"
+  register: _linger_stat
+  changed_when: false
+  failed_when: not _linger_stat.stat.exists
+  # If this fails, run once as root: loginctl enable-linger {{ ansible_user_id }}
 
 - name: Ensure config and systemd user dirs exist
   ansible.builtin.file:
@@ -11,8 +27,31 @@
   loop:
     - "{{ simpler_objects_config_dir }}"
     - "{{ simpler_objects_systemd_user_dir }}"
-  tags: [install]
 
-- name: Venv and pip install
-  ansible.builtin.import_tasks: venv.yml
-  tags: [venv, install, update]
+# A system Python upgrade can leave the venv's interpreter symlink dangling so
+# `pip` no longer loads (issue #73). Probe it and wipe a broken venv so the
+# create task below rebuilds it, instead of failing in the pip step. On a fresh
+# host the probe fails (no interpreter yet) and the removal is a harmless no-op.
+- name: Check the venv's pip is loadable
+  ansible.builtin.command: "{{ simpler_objects_venv }}/bin/python -m pip --version"
+  register: _venv_pip
+  changed_when: false
+  failed_when: false
+
+- name: Remove a broken venv so it gets rebuilt
+  ansible.builtin.file:
+    path: "{{ simpler_objects_venv }}"
+    state: absent
+  when: _venv_pip.rc != 0
+
+- name: Create the venv (idempotent — only on first run)
+  ansible.builtin.command:
+    cmd: "python3 -m venv {{ simpler_objects_venv }}"
+    creates: "{{ simpler_objects_venv }}/bin/python"
+
+- name: Install / upgrade simpler-objects in the venv
+  ansible.builtin.pip:
+    name: "{{ simpler_objects_git_url }}/archive/refs/tags/{{ simpler_objects_version }}.tar.gz"
+    state: present
+    virtualenv: "{{ simpler_objects_venv }}"
+  notify: Restart simpler-objects service
