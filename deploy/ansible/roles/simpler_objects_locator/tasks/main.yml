@@ -56,7 +56,7 @@
     state: restarted
     scope: user
   when: >
-    (_so_locator_env is changed)
-    or (_so_locator_unit is changed)
-    or (_so_pip_install is changed)
+    (_so_locator_env | default({})) is changed
+    or (_so_locator_unit | default({})) is changed
+    or (_so_pip_install | default({})) is changed
   tags: [config, update]

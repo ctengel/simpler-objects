@@ -66,8 +66,8 @@
     state: restarted
     scope: user
   when: >
-    (_so_env_file is changed)
-    or (_so_override is changed)
-    or (_so_unit is changed)
-    or (_so_pip_install is changed)
+    (_so_env_file | default({})) is changed
+    or (_so_override | default({})) is changed
+    or (_so_unit | default({})) is changed
+    or (_so_pip_install | default({})) is changed
   tags: [config, update]
