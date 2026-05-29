@@ -58,7 +58,7 @@ def replicate_object(source, dest):
 
 def get_bucket_contents(bucket):
     """Return each object in a bucket and its size"""
-    result = httpx.get(bucket, timeout=10)
+    result = httpx.get(bucket, timeout=16)
     result.raise_for_status()
     return {k: (v['size'], v['checksum'])
             for k, v in result.json()["objects"].items()
@@ -79,7 +79,7 @@ def replicate_bucket(source, dest):
 
 def auto_replica(locator, bucket, replicas):
     """Just figure out where to put stuff and do it"""
-    res = httpx.get(locator + bucket + '/', timeout=8)
+    res = httpx.get(locator + bucket + '/', timeout=32)
     res.raise_for_status()
     contents = res.json()
     error = False
@@ -125,7 +125,7 @@ def cli():
         default_replicas = int(os.environ.get("REPLICAS", "2"))
         results = [
             auto_replica(args.locator, b,
-                         int(os.environ.get(f"REPLICAS_{b.upper()}", default_replicas)))
+                         int(os.environ.get(f"REPLICAS_{b.upper().replace('-', '_')}", default_replicas)))
             for b in buckets
         ]
     sys.exit(int(not all(results)))

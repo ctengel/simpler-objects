@@ -240,6 +240,19 @@ def test_add_object_unreachable_server_excluded(client):
 
 
 @respx.mock
+def test_add_object_broken_server_excluded_not_conflict(client):
+    """A 500 on the existence check must drop the server, not raise 409."""
+    respx.get(SERVER_A + "health").mock(return_value=httpx.Response(200, json=_health()))
+    respx.get(SERVER_B + "health").mock(return_value=httpx.Response(200, json=_health()))
+    respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(500))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    respx.head(SERVER_B + BUCKET + "/").mock(return_value=httpx.Response(200))
+    resp = client.put(f"/{OBJ_PATH}", headers={"Content-Length": "100"}, follow_redirects=False)
+    assert resp.status_code == 307
+    assert SERVER_B in resp.headers["location"]
+
+
+@respx.mock
 def test_add_object_bucket_missing(client):
     """If the bucket doesn't exist on any candidate, return 507."""
     respx.get(SERVER_A + "health").mock(return_value=httpx.Response(200, json=_health()))

@@ -110,10 +110,12 @@ async def add_object(bucket: str, key: str,
     health = dict(zip(all_obj_servers, healths))
     candidates = filter_write_candidates(health, content_length)
     for server, status in exist_results:
-        if status is None:
-            candidates.pop(server, None)
-        elif status != 404:
+        if status == 404:
+            continue
+        if status in (200, 503):
             raise HTTPException(status_code=409)
+        # None or unexpected status (e.g. 500): server broken or unreachable
+        candidates.pop(server, None)
 
     async def check_bucket(server):
         try:
@@ -147,7 +149,7 @@ async def head_bucket(bucket: str):
 
     async def check_server(server):
         try:
-            result = await client.head(server + bucket + "/", timeout=2)
+            result = await client.head(server + bucket + "/", timeout=8)
             return result.status_code
         except httpx.HTTPError:
             return None
@@ -170,7 +172,7 @@ async def list_bucket(bucket: str):
 
     async def fetch_server(server):
         try:
-            result = await client.get(server + bucket + '/', timeout=2)
+            result = await client.get(server + bucket + '/', timeout=16)
         except httpx.HTTPError:
             return server, None
         return server, result

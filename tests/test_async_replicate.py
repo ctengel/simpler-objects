@@ -7,6 +7,8 @@ PUT request carries the correct Content-Length header.
 
 import base64
 import hashlib
+import sys
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -14,6 +16,7 @@ import respx
 
 from simpler_objects.async_replicate import (
     auto_replica,
+    cli,
     find_space,
     get_bucket_contents,
     get_object_size,
@@ -285,3 +288,25 @@ def test_auto_replica_continues_past_partial_object():
 
     assert result is False          # error flag set for the partial object
     assert put_route.called         # replication of the complete object ran
+
+
+# ---------------------------------------------------------------------------
+# cli env-var override
+# ---------------------------------------------------------------------------
+
+def test_cli_dash_bucket_uses_underscore_env_var(monkeypatch):
+    """Dashes in bucket names become underscores in the REPLICAS_ env var (issue #71)."""
+    monkeypatch.setenv("REPLICAS_MY_BACKUPS", "5")
+    calls = []
+
+    def fake_auto_replica(locator, bucket, replicas):
+        calls.append((bucket, replicas))
+        return True
+
+    with patch("simpler_objects.async_replicate.auto_replica", fake_auto_replica), \
+         patch("sys.argv", ["prog", "http://locator/", "my-backups"]):
+        with pytest.raises(SystemExit) as exc:
+            cli()
+
+    assert exc.value.code == 0
+    assert calls == [("my-backups", 5)]

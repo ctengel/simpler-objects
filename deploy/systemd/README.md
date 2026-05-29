@@ -171,13 +171,15 @@ systemctl --user enable --now simpler-objects-async-replicate.timer
 
 In `~/.config/simpler-objects/async-replicate.env`, add a
 `REPLICAS_<UPPERCASE_BUCKET>=N` line for each bucket that differs from the
-default `REPLICAS`:
+default `REPLICAS`. Dashes in bucket names become underscores in the env var
+name (e.g. bucket `my-backups` → `REPLICAS_MY_BACKUPS`):
 
 ```
-BUCKETS=photos backups archive
+BUCKETS=photos backups archive my-backups
 REPLICAS=2
 REPLICAS_BACKUPS=3
 REPLICAS_ARCHIVE=1
+REPLICAS_MY_BACKUPS=5
 ```
 
 ### Run once manually

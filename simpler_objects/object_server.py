@@ -23,17 +23,22 @@ BUFFER = 67108864
 RETRY_AFTER = "64"
 
 
-def safe_path(base: pathlib.Path, *parts) -> pathlib.Path:
-    """Resolve path and reject traversal outside base."""
+def safe_path(*parts) -> pathlib.Path:
+    """Resolve path and reject traversal outside OBJECT_DIRECTORY."""
+    base = pathlib.Path(OBJECT_DIRECTORY)
+    if not base.is_dir():
+        # the base object directory cannot be reached
+        raise HTTPException(status_code=500)
     resolved_base = base.resolve()
     candidate = base.joinpath(*parts).resolve()
     if not candidate.is_relative_to(resolved_base):
+        # someone is doing something tricky
         raise HTTPException(status_code=404)
     return candidate
 
 def object_filename(bucket, key):
     """Get the Path of an object"""
-    return safe_path(pathlib.Path(OBJECT_DIRECTORY), bucket, key)
+    return safe_path(bucket, key)
 
 def http_digest_head(file_digest: bytes) -> str:
     """Write an http digest header"""
@@ -72,7 +77,10 @@ def file_checksum(path):
 @app.get('/health')
 def healthcheck():
     """Return basic info on node health"""
-    disk_stats = shutil.disk_usage(pathlib.Path(OBJECT_DIRECTORY))
+    try:
+        disk_stats = shutil.disk_usage(pathlib.Path(OBJECT_DIRECTORY))
+    except FileNotFoundError:
+        raise HTTPException(status_code=500)
     r = {'read': True,
          'write': not READ_ONLY,
          'quota-available-bytes': disk_stats.free,
@@ -173,7 +181,7 @@ def list_buckets():
 
 @app.head("/{bucket}/")
 def head_bucket(bucket: str):
-    dir_path = safe_path(pathlib.Path(OBJECT_DIRECTORY), bucket)
+    dir_path = safe_path(bucket)
     if not dir_path.is_dir():
         raise HTTPException(status_code=404)
     return Response(status_code=200)
@@ -182,7 +190,7 @@ def head_bucket(bucket: str):
 @app.get("/{bucket}/")
 def list_directory(bucket: str):
     """List objects in bucket"""
-    dir_path = safe_path(pathlib.Path(OBJECT_DIRECTORY), bucket)
+    dir_path = safe_path(bucket)
     if not dir_path.is_dir():
         raise HTTPException(status_code=404)
     r = {"bucket": bucket,

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Simpler Objects API
-  version: 0.4.2
+  version: 0.4.3
   description: >
     Example hash values throughout this spec represent SHA-256("hello"):
     hex `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`,
@@ -36,6 +36,8 @@ paths:
                 quota-available-bytes: 107374182400
                 quota-used-bytes: 322122547200
                 percent: 25
+        '500':
+          description: Internal server error.
         '503':
           description: >
             Server unavailable (read and write are both false). Reserved for
@@ -182,6 +184,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+        '500':
+          description: Internal server error (object-server only).
         '503':
           description: >
             Object temporarily unavailable. From an object server, a PUT of
@@ -251,6 +255,8 @@ paths:
                 $ref: '#/components/schemas/ProblemDetail'
         '422':
           description: Validation Error
+        '500':
+          description: Internal server error (object-server only).
         '503':
           description: >
             Object temporarily unavailable. From an object server, a PUT of
@@ -412,6 +418,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+        '500':
+          description: Internal server error (object-server only).
   /{bucket}/:
     get:
       tags:
@@ -459,6 +467,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+        '500':
+          description: Internal server error (object-server only).
         '503':
           description: One or more upstream object servers returned an unexpected error (locator-api only)
     head:
@@ -482,6 +492,8 @@ paths:
           description: Bucket not found
         '422':
           description: Validation Error
+        '500':
+          description: Internal server error (object-server only).
         '503':
           description: One or more upstream object servers returned an unexpected error (locator-api only)
   /:
