@@ -31,13 +31,17 @@ These steps require root. Everything after this section runs as the service user
 
 **Fedora:**
 ```
-sudo dnf install -y python3 python3-venv
+sudo dnf install -y python3 python3-venv python3-packaging
 ```
 
 **Raspberry Pi OS / Debian:**
 ```
-sudo apt update && sudo apt install -y python3 python3-venv
+sudo apt update && sudo apt install -y python3 python3-venv python3-packaging
 ```
+
+`python3-packaging` is required by Ansible's `pip` module for version
+comparison — install it on the system Python even though the app itself runs
+in a venv.
 
 The package is installed from a release tarball (below), so `git` is not
 required. No `libcurl` headers are required for the server install either —

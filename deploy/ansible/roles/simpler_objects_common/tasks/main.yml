@@ -11,6 +11,13 @@
   ansible.builtin.command: python3 -m venv --help
   changed_when: false
 
+- name: Assert python3-packaging is installed (required by Ansible pip module)
+  ansible.builtin.command: python3 -c "import packaging"
+  changed_when: false
+  # If this fails, install python3-packaging via the OS package manager as root:
+  #   Fedora:  dnf install -y python3-packaging
+  #   Debian:  apt install -y python3-packaging
+
 - name: Assert loginctl linger is enabled for this user
   ansible.builtin.stat:
     path: "/var/lib/systemd/linger/{{ ansible_user_id }}"
