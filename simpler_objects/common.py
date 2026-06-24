@@ -18,10 +18,13 @@ def check_content_type_extension(key: str, content_type: str | None) -> bool:
     if not content_type:
         return True
     ct_base = content_type.split(';')[0].strip()
-    ext_mime, _ = mimetypes.guess_type(key)
+    ext_mime, _ = mimetypes.guess_type(key, strict=False)
     if ext_mime is None or ct_base == 'application/octet-stream':
         return True
-    return ct_base == ext_mime
+    if ct_base == ext_mime:
+        return True
+    # Return False if there are better extensions for this type
+    return not mimetypes.guess_all_extensions(ct_base, strict=False)
 
 
 def filter_write_candidates(health: dict, object_size: int, exclude=()) -> dict:

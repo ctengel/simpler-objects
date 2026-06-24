@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Simpler Objects API
-  version: 0.4.3
+  version: 0.4.7
   description: >
     Example hash values throughout this spec represent SHA-256("hello"):
     hex `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`,
@@ -274,11 +274,13 @@ paths:
         - Objects
       summary: Put Object
       description: >
-        Store an object. If the client supplies a `Content-Type` header and the key has a
-        recognizable file extension, the server validates that they are consistent (e.g.,
-        `image/jpeg` for `.jpg`). `application/octet-stream` is always accepted for any
-        extension. A mismatch returns `415 Unsupported Media Type`. GET responses determine
-        Content-Type from the file extension regardless.
+        Store an object. If the client supplies a `Content-Type` header, the server applies a
+        lenient consistency check: it returns `415 Unsupported Media Type` only when the
+        `Content-Type` is one the server recognizes *and* the key's extension is not among the
+        extensions that type maps to (e.g. `video/mp4` for a `.mkv` key). A `Content-Type` the
+        server does not recognize, `application/octet-stream`, an extension-less key, and an
+        absent `Content-Type` are all accepted. GET responses determine Content-Type from the
+        file extension regardless.
 
 
         `Content-Length` is required. The locator uses it to select a server with sufficient
@@ -386,10 +388,11 @@ paths:
                 detail: Content-Length header is required for PUT requests
         '415':
           description: >
-            Unsupported Media Type — the Content-Type header does not match the MIME type
-            implied by the key's file extension (object-server and locator). application/octet-stream
-            is always accepted. If no Content-Type header is sent, or the extension is
-            unrecognized, no validation is performed.
+            Unsupported Media Type — the Content-Type header is one the server recognizes,
+            but the key's extension is not among the extensions that type maps to, e.g.
+            video/mp4 for a .mkv key (object-server and locator). The check is lenient: a
+            Content-Type the server does not recognize, application/octet-stream, an
+            extension-less key, and an absent Content-Type are all accepted.
           content:
             application/problem+json:
               schema:

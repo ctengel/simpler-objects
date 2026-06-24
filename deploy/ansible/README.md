@@ -76,7 +76,7 @@ The inventory `ansible_user` should be the service user (e.g.
 all:
   vars:
     ansible_user: simpler-objects
-    simpler_objects_version: v0.4.4
+    simpler_objects_version: v0.4.7
 ```
 
 After a real run:
@@ -127,7 +127,7 @@ machine, or not at all) — trim your inventory to a single group:
 all:
   vars:
     ansible_user: simpler-objects
-    simpler_objects_version: v0.4.4
+    simpler_objects_version: v0.4.7
   children:
     object_servers:
       hosts:

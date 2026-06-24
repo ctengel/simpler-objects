@@ -95,7 +95,7 @@ Create a venv in the service user's home directory and install the package:
 ```
 python3 -m venv ~/venv
 ~/venv/bin/pip install \
-    https://github.com/ctengel/simpler-objects/archive/refs/tags/v0.4.4.tar.gz
+    https://github.com/ctengel/simpler-objects/archive/refs/tags/v0.4.7.tar.gz
 ```
 
 (This is the gitless install the Ansible playbook also uses. To upgrade later,

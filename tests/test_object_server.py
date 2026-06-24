@@ -190,8 +190,10 @@ def test_path_traversal_returns_404(tmp_path, monkeypatch):
     ("photo.jpg",  "application/octet-stream",  201),  # generic binary wildcard
     ("photo.jpg",  None,                        201),  # no header → no validation
     ("datafile",   "text/plain",                201),  # no extension → no validation
+    ("movie.mkv",  "video/x-matroska",          201),  # issue #80: cross-distro mkv label
     ("photo.jpg",  "text/plain",                415),  # mismatch
     ("readme.txt", "image/jpeg",                415),  # mismatch
+    ("movie.mkv",  "video/mp4",                 415),  # recognized type, wrong extension
 ])
 def test_put_content_type_extension_validation(client, tmp_path, filename, content_type, expected_status):
     headers = {}
