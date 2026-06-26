@@ -224,6 +224,8 @@ is in the journal:
 
 ```
 journalctl --user -u simpler-objects-object-server -n 50
+# from an admin account via sudo (not the service user):
+sudo journalctl _SYSTEMD_USER_UNIT=simpler-objects-object-server.service -n 50
 ```
 
 Inspect the `crash-victim:`, `stale-entry:`, and `garbled-line:` lines, then
@@ -244,7 +246,7 @@ repeated `ExecStartPre` failures.
 ## Operations
 
 ```
-# Logs
+# Logs (run as the service user, in a session with $XDG_RUNTIME_DIR set)
 journalctl --user -u simpler-objects-object-server -f
 journalctl --user -u simpler-objects-locator -f
 
@@ -258,3 +260,28 @@ systemctl --user list-units 'simpler-objects-*'
 curl http://<host>:29164/health        # locator
 curl http://<host>:29171/health        # object server
 ```
+
+### Viewing logs from an admin account (via `sudo`)
+
+The commands above assume you are logged in **as the service user** with a live
+session. If you operate from a separate admin login and `sudo`, two things bite:
+
+- `journalctl --user` reads *your own* session journal, not the service account's
+  (the service user may also lack permission to read its own journal — it needs to
+  be in `systemd-journal`/`adm`). Use the journal **field filter** instead, which
+  works from root regardless of which user owns the units:
+
+  ```
+  sudo journalctl _SYSTEMD_USER_UNIT=simpler-objects-object-server.service -e
+  sudo journalctl _SYSTEMD_USER_UNIT=simpler-objects-locator.service -f
+  ```
+
+- `sudo systemctl list-units 'simpler-objects-*'` shows **nothing** — these are
+  *user* units, invisible to the system manager. To inspect them as an admin,
+  target the service user's manager (`<serviceuser>@`; linger is enabled per the
+  prerequisites, so the user manager is reachable):
+
+  ```
+  sudo systemctl --user -M <serviceuser>@ list-units 'simpler-objects-*'
+  sudo systemctl --user -M <serviceuser>@ status simpler-objects-object-server
+  ```
