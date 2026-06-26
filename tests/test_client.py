@@ -18,6 +18,7 @@ import threading
 import time
 
 import httpx
+import pycurl
 import pytest
 
 from simpler_objects import client
@@ -66,6 +67,84 @@ def test_file_checksum(tmp_path):
     payload = os.urandom(5 * 1024 * 1024 + 17)  # spans several BLOCK_SIZE reads
     target.write_bytes(payload)
     assert client.file_checksum(target) == hashlib.sha256(payload).digest()
+
+
+class _RewindingCurl:
+    """A fake pycurl.Curl that simulates the locator's 307 body replay.
+
+    perform() streams the body once (as if to the locator), then rewinds via the
+    registered SEEKFUNCTION and streams it again (the replay to the object
+    server). It records both reads and the seek result so the test can prove the
+    rewind actually worked — the path that fails with CURLE_SEND_FAIL_REWIND
+    (error 65) when no seek callback is registered.
+    """
+
+    def __init__(self):
+        self.opts = {}
+        self.first_read = b""
+        self.replay_read = b""
+        self.seek_result = None
+        self.probe_seek_result = None
+
+    def setopt(self, opt, value):
+        self.opts[opt] = value
+
+    def _drain(self):
+        body = self.opts[pycurl.READDATA]
+        return b"".join(iter(lambda: body.read(64 * 1024), b""))
+
+    def perform(self):
+        seek = self.opts.get(pycurl.SEEKFUNCTION)
+        if seek is None:
+            # Mirror libcurl: a redirect with an unrewindable body errors here.
+            raise pycurl.error(pycurl.E_SEND_FAIL_REWIND,
+                               "necessary data rewind was not possible")
+        self.first_read = self._drain()
+        self.seek_result = seek(0, os.SEEK_SET)
+        self.replay_read = self._drain()
+        # Probe a non-zero offset while the body is still open: a bare body.seek
+        # would return 7 here, not SEEKFUNC_OK, so this guards the wrapper.
+        self.probe_seek_result = seek(7, os.SEEK_SET)
+
+    def getinfo(self, _info):
+        return 201
+
+    def close(self):
+        pass
+
+
+def test_upload_rewinds_body_on_redirect(tmp_path, monkeypatch):
+    """Regression for error 65: the body must be replayable after the 307.
+
+    If the Expect: 100-continue handshake times out the body streams to the
+    locator and libcurl must rewind it to replay to the object server. Drive the
+    upload through a fake Curl that exercises exactly that read/seek path.
+    """
+    data = os.urandom(3 * 1024 * 1024 + 7)
+    src = tmp_path / "rewind.bin"
+    src.write_bytes(data)
+
+    captured = {}
+
+    def _factory():
+        captured["curl"] = _RewindingCurl()
+        return captured["curl"]
+
+    monkeypatch.setattr(pycurl, "Curl", _factory)
+
+    digest = client.simple_upload(str(src), "http://locator.test/mybucket/key")
+
+    fake = captured["curl"]
+    assert digest == hashlib.sha256(data).digest()
+    # The body survived the rewind: the replay leg read the whole file again.
+    assert fake.replay_read == data
+    assert fake.first_read == data
+    # The wrapper reports success to libcurl, not the new file offset that a bare
+    # body.seek would return (0 here by luck, but non-zero offsets would break).
+    assert fake.seek_result == pycurl.SEEKFUNC_OK
+    assert fake.probe_seek_result == pycurl.SEEKFUNC_OK
+    # The handshake is given well over libcurl's 1 s default to land first.
+    assert fake.opts[pycurl.EXPECT_100_TIMEOUT_MS] >= 5000
 
 
 # ---------------------------------------------------------------------------

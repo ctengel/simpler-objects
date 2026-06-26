@@ -18,6 +18,12 @@ import pycurl
 
 BLOCK_SIZE = 16 * 1024 * 1024  # 16 MiB streaming chunk
 _DOWNLOAD_BUFFER = 256 * 1024  # libcurl receive buffer size for downloads
+# How long to wait for the locator's 100-continue/307 before sending the body
+# anyway. Well over libcurl's 1 s default so the handshake lands before the
+# locator's multi-stage fan-out responds (issue #26), keeping the body off the
+# locator leg. If it does time out, the SEEKFUNCTION rewind keeps the upload
+# correct (issue #26 / CURLE_SEND_FAIL_REWIND).
+_EXPECT_100_TIMEOUT_MS = 32000
 
 
 class ClientError(Exception):
@@ -112,6 +118,7 @@ def simple_upload(filename, url, file_mime=None, checksum_val=None) -> bytes:
     curl.setopt(pycurl.URL, url)
     curl.setopt(pycurl.UPLOAD, 1)
     curl.setopt(pycurl.FOLLOWLOCATION, 1)
+    curl.setopt(pycurl.EXPECT_100_TIMEOUT_MS, _EXPECT_100_TIMEOUT_MS)
     curl.setopt(pycurl.INFILESIZE_LARGE, size)
     curl.setopt(pycurl.HTTPHEADER, [
         'Expect: 100-continue',
@@ -123,6 +130,15 @@ def simple_upload(filename, url, file_mime=None, checksum_val=None) -> bytes:
     try:
         with open(path, 'rb') as body:
             curl.setopt(pycurl.READDATA, body)
+            # If the handshake times out and the body starts streaming to the
+            # locator, libcurl needs to rewind it to replay on the 307. Without a
+            # seek callback that fails with CURLE_SEND_FAIL_REWIND (error 65).
+            # Pass a wrapper, not body.seek: file.seek returns the new offset,
+            # but libcurl only reads 0/SEEKFUNC_OK as success.
+            def _seek(offset, origin):
+                body.seek(offset, origin)
+                return pycurl.SEEKFUNC_OK
+            curl.setopt(pycurl.SEEKFUNCTION, _seek)
             curl.perform()
         code = curl.getinfo(pycurl.RESPONSE_CODE)
     except pycurl.error as exc:
