@@ -37,6 +37,7 @@ test = [
     "referencing",
     "pyyaml",
     "pycurl",
+    "trustme",
 ]
 
 [project.scripts]

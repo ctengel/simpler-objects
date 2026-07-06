@@ -12,9 +12,13 @@ EnvironmentFile=%E/simpler-objects/locator.env
 Environment=HOST=0.0.0.0
 Environment=PORT=29164
 Environment=WORKERS=1
+# Set in the env file to enable TLS, e.g.
+# UVICORN_TLS=--ssl-certfile /path/host.crt --ssl-keyfile /path/host.key
+# ($UVICORN_TLS is unquoted in ExecStart so an empty value adds no flags.)
+Environment=UVICORN_TLS=
 
 # Adjust the venv path with a drop-in if you installed elsewhere.
-ExecStart=%h/venv/bin/uvicorn simpler_objects.locator_api:app --host ${HOST} --port ${PORT} --workers ${WORKERS}
+ExecStart=%h/venv/bin/uvicorn simpler_objects.locator_api:app --host ${HOST} --port ${PORT} --workers ${WORKERS} $UVICORN_TLS
 
 Restart=on-failure
 RestartSec=5s

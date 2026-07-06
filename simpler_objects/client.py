@@ -99,7 +99,7 @@ def _header_collector(store: dict):
 # --- public API -------------------------------------------------------------
 
 def simple_upload(filename, url, file_mime=None, checksum_val=None,
-                  api_key=None) -> bytes:
+                  api_key=None, ca_bundle=None) -> bytes:
     """PUT a local file to a Simpler Objects locator (or object server) URL.
 
     The body is uploaded once: ``Expect: 100-continue`` lets the locator answer
@@ -109,7 +109,9 @@ def simple_upload(filename, url, file_mime=None, checksum_val=None,
 
     ``api_key`` is sent as ``Authorization: Bearer`` on the locator leg;
     libcurl drops it on the cross-host redirect, which is fine — the signed
-    URL in the 307 Location is all the object server needs.
+    URL in the 307 Location is all the object server needs. ``ca_bundle``
+    is a PEM file to verify HTTPS servers against (e.g. a private CA);
+    default is libcurl's system trust store.
     """
     path = pathlib.Path(filename)
     size = path.stat().st_size
@@ -133,6 +135,8 @@ def simple_upload(filename, url, file_mime=None, checksum_val=None,
     if api_key:
         headers.append(f'Authorization: Bearer {api_key}')
     curl.setopt(pycurl.HTTPHEADER, headers)
+    if ca_bundle:
+        curl.setopt(pycurl.CAINFO, str(ca_bundle))
     curl.setopt(pycurl.HEADERFUNCTION, _header_collector(response_headers))
     curl.setopt(pycurl.WRITEDATA, io.BytesIO())  # discard the empty 201 body
     try:
@@ -162,7 +166,7 @@ def simple_upload(filename, url, file_mime=None, checksum_val=None,
     return checksum_val
 
 
-def simple_download(url, filename, api_key=None):
+def simple_download(url, filename, api_key=None, ca_bundle=None):
     """GET an object to a local file.
 
     Streams to disk while computing the SHA-256, and verifies it against the
@@ -172,7 +176,9 @@ def simple_download(url, filename, api_key=None):
 
     ``api_key`` is sent as ``Authorization: Bearer`` on the locator leg;
     libcurl drops it on the cross-host redirect, which is fine — the signed
-    URL in the 307 Location is all the object server needs.
+    URL in the 307 Location is all the object server needs. ``ca_bundle``
+    is a PEM file to verify HTTPS servers against (e.g. a private CA);
+    default is libcurl's system trust store.
     """
     path = pathlib.Path(filename)
     response_headers: dict = {}
@@ -185,6 +191,8 @@ def simple_download(url, filename, api_key=None):
     if api_key:
         headers.append(f'Authorization: Bearer {api_key}')
     curl.setopt(pycurl.HTTPHEADER, headers)
+    if ca_bundle:
+        curl.setopt(pycurl.CAINFO, str(ca_bundle))
     curl.setopt(pycurl.HEADERFUNCTION, _header_collector(response_headers))
     try:
         with open(path, 'wb') as out:

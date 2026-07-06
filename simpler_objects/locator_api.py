@@ -9,7 +9,7 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Header, Request
 from fastapi.responses import RedirectResponse, Response
 from simpler_objects import auth
-from simpler_objects.common import check_content_type_extension, filter_write_candidates
+from simpler_objects.common import check_content_type_extension, filter_write_candidates, httpx_verify
 
 OBJECT_SERVERS = os.environ.get('OBJECT_SERVERS', 'http://localhost:46579/')
 # Shared HMAC secret for signing object-server URLs; unset = no signing.
@@ -17,6 +17,8 @@ CLUSTER_SECRET = os.environ.get('CLUSTER_SECRET', '')
 SIGNED_URL_TTL = int(os.environ.get('SIGNED_URL_TTL', str(auth.DEFAULT_TTL)))
 # Path to the client API-key/permission TOML; unset = no client auth.
 AUTH_CONFIG = os.environ.get('AUTH_CONFIG')
+# PEM bundle to verify the object servers' TLS certs; unset = system trust.
+CA_BUNDLE = os.environ.get('CA_BUNDLE', '')
 
 # Fallback Retry-After on a busy 503; matches the object server's own constant.
 RETRY_AFTER = "64"
@@ -48,7 +50,7 @@ async def lifespan(app: FastAPI):
             "set CLUSTER_SECRET on the locator and object servers first")
     app.state.auth = auth.AuthConfig.load(AUTH_CONFIG) if AUTH_CONFIG else None
     # One pooled client for the whole app, reused across all requests.
-    app.state.client = httpx.AsyncClient()
+    app.state.client = httpx.AsyncClient(verify=httpx_verify(CA_BUNDLE))
     yield
     await app.state.client.aclose()
 

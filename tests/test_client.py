@@ -12,6 +12,7 @@ import hashlib
 import os
 import pathlib
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -157,11 +158,11 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _wait_for(url: str, timeout: float = 20.0) -> bool:
+def _wait_for(url: str, timeout: float = 20.0, verify=True) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            if httpx.get(url, timeout=1).status_code == 200:
+            if httpx.get(url, timeout=1, verify=verify).status_code == 200:
                 return True
         except httpx.HTTPError:
             pass
@@ -169,10 +170,10 @@ def _wait_for(url: str, timeout: float = 20.0) -> bool:
     return False
 
 
-def _spawn(module: str, port: int, env_extra: dict) -> subprocess.Popen:
+def _spawn(module: str, port: int, env_extra: dict, args=()) -> subprocess.Popen:
     return subprocess.Popen(
         [sys.executable, "-m", "uvicorn", f"simpler_objects.{module}:app",
-         "--port", str(port), "--log-level", "warning"],
+         "--port", str(port), "--log-level", "warning", *args],
         cwd=REPO_ROOT, env={**os.environ, **env_extra},
     )
 
@@ -412,3 +413,86 @@ def test_secured_direct_object_server_needs_signature(secured_servers, tmp_path)
     direct = f"{secured_servers['object_server']}/{BUCKET}/{key}"
     assert httpx.get(direct).status_code == 401
     assert httpx.get(direct + "?exp=9999999999&sig=" + "0" * 64).status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — TLS (private CA) on top of the secured cluster
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def tls_servers(tmp_path_factory):
+    """Run the full stack over HTTPS: private CA, signing, and client auth."""
+    trustme = pytest.importorskip("trustme")
+    tls_dir = tmp_path_factory.mktemp("tls")
+    ca = trustme.CA()
+    ca_pem = tls_dir / "ca.pem"
+    ca.cert_pem.write_to_path(ca_pem)
+    host_cert = ca.issue_cert("127.0.0.1", "localhost")
+    cert_pem, key_pem = tls_dir / "host.crt", tls_dir / "host.key"
+    with cert_pem.open("wb") as f:
+        for blob in host_cert.cert_chain_pems:
+            f.write(blob.bytes())
+    host_cert.private_key_pem.write_to_path(key_pem)
+    tls_args = ("--ssl-certfile", str(cert_pem), "--ssl-keyfile", str(key_pem))
+
+    obj_dir = tmp_path_factory.mktemp("objects-tls")
+    (obj_dir / BUCKET).mkdir()
+    auth_toml = tmp_path_factory.mktemp("config-tls") / "auth.toml"
+    auth_toml.write_text(f"""
+[clients.oi]
+key = "{OI_KEY}"
+[clients.oi.buckets]
+{BUCKET} = ["read", "write", "list"]
+""")
+    auth_toml.chmod(0o600)
+    obj_port, loc_port = _free_port(), _free_port()
+
+    obj_proc = _spawn("object_server", obj_port,
+                      {"OBJECT_DIRECTORY": str(obj_dir),
+                       "CLUSTER_SECRET": SECRET},
+                      args=tls_args)
+    loc_proc = _spawn("locator_api", loc_port,
+                      {"OBJECT_SERVERS": f"https://127.0.0.1:{obj_port}/",
+                       "CLUSTER_SECRET": SECRET,
+                       "AUTH_CONFIG": str(auth_toml),
+                       "CA_BUNDLE": str(ca_pem)},
+                      args=tls_args)
+    ca_ctx = ssl.create_default_context(cafile=str(ca_pem))
+    try:
+        if not (_wait_for(f"https://127.0.0.1:{obj_port}/health", verify=ca_ctx)
+                and _wait_for(f"https://127.0.0.1:{loc_port}/health", verify=ca_ctx)):
+            pytest.skip("could not start TLS object server / locator subprocesses")
+        yield {"locator": f"https://127.0.0.1:{loc_port}", "ca": str(ca_pem)}
+    finally:
+        for proc in (loc_proc, obj_proc):
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+def test_tls_upload_download_roundtrip(tls_servers, tmp_path):
+    """HTTPS end to end: locator leg, redirect leg, and the locator's own
+    probes to the object server all verify against the private CA."""
+    data = os.urandom(1024 * 1024 + 3)
+    src = tmp_path / "src.bin"
+    src.write_bytes(data)
+    url = _object_url(tls_servers, "tls-rt")
+
+    assert client.simple_upload(str(src), url, api_key=OI_KEY,
+                                ca_bundle=tls_servers["ca"]) == hashlib.sha256(data).digest()
+
+    dst = tmp_path / "dst.bin"
+    digest, _, _, _ = client.simple_download(url, str(dst), api_key=OI_KEY,
+                                             ca_bundle=tls_servers["ca"])
+    assert digest == hashlib.sha256(data).digest()
+    assert dst.read_bytes() == data
+
+
+def test_tls_untrusted_ca_rejected(tls_servers, tmp_path):
+    """Without the CA bundle, certificate verification fails — proof that
+    the client actually verifies rather than silently accepting any cert."""
+    with pytest.raises(client.ClientError):
+        client.simple_download(_object_url(tls_servers, "untrusted"),
+                               str(tmp_path / "untrusted-dl"), api_key=OI_KEY)

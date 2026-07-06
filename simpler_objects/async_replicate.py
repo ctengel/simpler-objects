@@ -8,7 +8,7 @@ import random
 import sys
 import httpx
 from simpler_objects import auth
-from simpler_objects.common import filter_write_candidates
+from simpler_objects.common import filter_write_candidates, httpx_verify
 
 TIMEOUT=2048
 
@@ -32,8 +32,8 @@ def locator_headers():
     return {'Authorization': f'Bearer {API_KEY}'} if API_KEY else {}
 
 def tls_verify():
-    """Value for httpx verify= — the CA bundle path, or default trust."""
-    return CA_BUNDLE or True
+    """Value for httpx verify= — the CA bundle if set, or default trust."""
+    return httpx_verify(CA_BUNDLE)
 
 def find_space(locator, bucket, object_size, current, desired):
     """Find servers with space for replication"""
