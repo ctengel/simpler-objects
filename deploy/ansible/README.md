@@ -47,6 +47,8 @@ loginctl enable-linger simpler-objects
 
 - `~/venv` and the pip-installed package at a pinned git tag
 - `~/.config/simpler-objects/*.env` per-service config files (mode 0600)
+- `~/.config/simpler-objects/auth.toml` (locator; when client auth is configured)
+- `~/.config/simpler-objects/tls/` cert/key/CA material (when TLS is configured)
 - The systemd user units under `~/.config/systemd/user/`
 - A `RequiresMountsFor=` drop-in under
   `~/.config/systemd/user/simpler-objects-object-server.service.d/`
@@ -103,6 +105,36 @@ the playbook exposes:
 | `object_server_read_only`   | per host   | `true` → RO mirror; default `false`      |
 | `object_server_port`        | per host   | uvicorn listen port; default `29171`     |
 | `object_server_workers`     | per host   | uvicorn worker count; default `1`        |
+| `simpler_objects_cluster_secret` | `all.vars` (Vault) | Shared HMAC secret enabling signed object-server URLs |
+| `locator_auth_clients`      | locator host | Client API keys + per-bucket permissions; renders `auth.toml` (requires the cluster secret; keep keys in Vault) |
+| `locator_signed_url_ttl`    | locator host | Signed-URL validity in seconds; default `900` |
+| `replicate_api_key`         | replicator host | API key for the locator's bucket listing |
+| `tls_certfile_src` / `tls_keyfile_src` | per host | Control-machine paths to the host's cert/key; enables HTTPS |
+| `tls_ca_src`                | `all.vars` or per host | Control-machine path to the CA bundle; sets `CA_BUNDLE` on locator/replicator |
+
+## Auth and TLS
+
+All security is opt-in; an inventory without the variables above deploys
+plain HTTP with no authentication, exactly as before. To secure a cluster:
+
+1. Generate a cluster secret (`openssl rand -hex 32`) and set
+   `simpler_objects_cluster_secret` in `all.vars`, encrypted with
+   `ansible-vault encrypt_string`. Re-run the playbook — object servers now
+   require signed URLs and the locator/replicator mint them.
+2. Add `locator_auth_clients` (keys also Vault-encrypted) on the locator
+   host and `replicate_api_key` on the replicator. Re-run — the locator now
+   requires an API key per client with per-bucket `read`/`write`/`list`.
+3. Create a private CA and per-host certificates (walkthrough in
+   [`../systemd/README.md`](../systemd/README.md)), put them under e.g.
+   `files/tls/` on the control machine, and set `tls_certfile_src`/
+   `tls_keyfile_src` per host plus `tls_ca_src` in `all.vars`. Re-run — the
+   `simpler_objects_tls` role distributes the material to
+   `~/.config/simpler-objects/tls/` and the units serve HTTPS. Remember to
+   switch `locator_object_servers` (and clients) to `https://` URLs.
+
+Each step is independently reversible: remove the variables and re-run.
+Certificate rotation = replace the files under `files/tls/` and re-run (the
+handler restarts the units).
 
 ## Partial deployment — managing one service only
 
@@ -188,8 +220,9 @@ deploy/ansible/
 ├── site.yml                        — top-level play
 └── roles/
     ├── simpler_objects_common/             — prereq checks, venv, pip install
+    ├── simpler_objects_tls/                — distributes cert/key/CA (no-op if unset)
     ├── simpler_objects_object_server/      — env file + drop-in per instance
-    ├── simpler_objects_locator/            — env file + unit + enable
+    ├── simpler_objects_locator/            — env file + auth.toml + unit + enable
     └── simpler_objects_async_replicate/    — env file + unit + timer + enable
 ```
 
@@ -203,6 +236,9 @@ in `../systemd/` flow through on the next playbook run.
 - Bucket directory creation
 - `chown` of `OBJECT_DIRECTORY` — buckets are presumed to already be owned
   correctly; the role verifies and fails loudly otherwise
-- Firewalling, TLS, reverse proxy
+- Firewalling, reverse proxy
+- Certificate *generation* — the `simpler_objects_tls` role only distributes
+  cert/key/CA files you provide (see "Auth and TLS" and the private-CA
+  walkthrough in `../systemd/README.md`)
 - Multi-locator HA
 - User creation, package installation, or linger setup (root prerequisites)

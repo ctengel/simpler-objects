@@ -1,0 +1,13 @@
+---
+# Where TLS material lands on the managed host. Referenced by the service
+# roles' env templates (CA_BUNDLE / UVICORN_TLS point here).
+simpler_objects_tls_dir: "{{ simpler_objects_config_dir }}/tls"
+
+# Control-machine paths to operator-provided TLS material. All optional —
+# with none set this role is a no-op and the cluster speaks plain HTTP.
+# Certificate GENERATION is out of scope; see deploy/systemd/README.md for
+# the private-CA walkthrough.
+#
+# tls_certfile_src: files/tls/{{ inventory_hostname }}.crt   # per-host cert
+# tls_keyfile_src:  files/tls/{{ inventory_hostname }}.key   # per-host key
+# tls_ca_src:       files/tls/ca.pem                         # CA bundle

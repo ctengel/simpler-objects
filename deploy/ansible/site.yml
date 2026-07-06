@@ -27,6 +27,7 @@
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default('') }}"
   roles:
     - simpler_objects_common
+    - simpler_objects_tls
     - simpler_objects_object_server
 
 - name: Install and configure locator
@@ -35,6 +36,7 @@
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default('') }}"
   roles:
     - simpler_objects_common
+    - simpler_objects_tls
     - simpler_objects_locator
 
 - name: Install and configure async-replication timer
@@ -43,4 +45,5 @@
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid | default('') }}"
   roles:
     - simpler_objects_common
+    - simpler_objects_tls
     - simpler_objects_async_replicate

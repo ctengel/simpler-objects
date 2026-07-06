@@ -18,6 +18,10 @@ EnvironmentFile=%E/simpler-objects/object-server.env
 Environment=HOST=0.0.0.0
 Environment=PORT=29171
 Environment=WORKERS=1
+# Set in the env file to enable TLS, e.g.
+# UVICORN_TLS=--ssl-certfile /path/host.crt --ssl-keyfile /path/host.key
+# ($UVICORN_TLS is unquoted in ExecStart so an empty value adds no flags.)
+Environment=UVICORN_TLS=
 
 # Refuse to start if a previous crash left orphan partial files or a garbled
 # checksum file. Dry-run only — operator must run scrub with --delete-victims
@@ -25,7 +29,7 @@ Environment=WORKERS=1
 ExecStartPre=%h/venv/bin/python -m simpler_objects.scrub ${OBJECT_DIRECTORY}
 
 # Adjust the venv path with a drop-in if you installed elsewhere.
-ExecStart=%h/venv/bin/uvicorn simpler_objects.object_server:app --host ${HOST} --port ${PORT} --workers ${WORKERS}
+ExecStart=%h/venv/bin/uvicorn simpler_objects.object_server:app --host ${HOST} --port ${PORT} --workers ${WORKERS} $UVICORN_TLS
 
 Restart=on-failure
 RestartSec=5s

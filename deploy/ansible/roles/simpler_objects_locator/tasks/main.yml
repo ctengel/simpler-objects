@@ -18,11 +18,31 @@
     quiet: true
   loop: "{{ locator_object_servers }}"
 
+# Mirror the app's own startup guard so a bad inventory fails at deploy time,
+# not on the first service restart.
+- name: Require cluster secret when client auth is configured
+  ansible.builtin.assert:
+    that: simpler_objects_cluster_secret is defined
+    fail_msg: >
+      `locator_auth_clients` is set but `simpler_objects_cluster_secret` is
+      not — authenticated clients must not be redirected to unsigned URLs.
+      Set the secret (vault-encrypted) on the whole cluster.
+    quiet: true
+  when: locator_auth_clients is defined
+
 - name: Render locator env file
   ansible.builtin.template:
     src: locator.env.j2
     dest: "{{ simpler_objects_config_dir }}/locator.env"
     mode: "0600"
+  notify: Restart simpler-objects service
+
+- name: Render client auth config
+  ansible.builtin.template:
+    src: auth.toml.j2
+    dest: "{{ simpler_objects_config_dir }}/auth.toml"
+    mode: "0600"
+  when: locator_auth_clients is defined
   notify: Restart simpler-objects service
 
 - name: Install locator unit

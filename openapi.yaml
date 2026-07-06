@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Simpler Objects API
-  version: 0.4.7
+  version: 0.5.0
   description: >
     Example hash values throughout this spec represent SHA-256("hello"):
     hex `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`,
@@ -61,6 +61,11 @@ paths:
       summary: Get Object
       description: Retrieve an existing object
       operationId: getObject
+      security:
+      - {}
+      - basicAuth: []
+      - bearerAuth: []
+      - signedUrl: []
       parameters:
       - name: bucket
         in: path
@@ -90,6 +95,8 @@ paths:
           type: string
         description: 'Return 304 if ETag matches (conditional GET, RFC 9110)'
         example: '"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"'
+      - $ref: '#/components/parameters/SignedExp'
+      - $ref: '#/components/parameters/SignedSig'
       responses:
         '200':
           description: Object data (Content-Type reflects the stored object)
@@ -165,6 +172,27 @@ paths:
                 type: string
         '307':
           description: Temporary redirect to the server hosting this object (locator-api only)
+        '401':
+          description: >
+            Authentication required (only when auth is enabled). From an
+            object server, the `exp`/`sig` query parameters are missing. From
+            the locator, no valid API key was presented.
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+              description: >
+                Sent by the locator. Advertises Basic (username = client
+                name, password = API key) so browsers prompt; a Bearer
+                header carrying the bare key is accepted equally.
+              example: 'Basic realm="simpler-objects", charset="UTF-8"'
+        '403':
+          description: >
+            Not authorized (only when auth is enabled). From an object
+            server, the signature is invalid, expired, or minted for a
+            different operation. From the locator, the authenticated client
+            lacks permission for this operation on this bucket.
         '404':
           description: Object not found
           content:
@@ -204,6 +232,11 @@ paths:
       summary: Get Object Metadata
       description: Retrieve metadata for an existing object without downloading it
       operationId: headObject
+      security:
+      - {}
+      - basicAuth: []
+      - bearerAuth: []
+      - signedUrl: []
       parameters:
       - name: bucket
         in: path
@@ -219,6 +252,8 @@ paths:
           type: string
           title: Key
         example: document.pdf
+      - $ref: '#/components/parameters/SignedExp'
+      - $ref: '#/components/parameters/SignedSig'
       responses:
         '200':
           description: Object exists
@@ -247,6 +282,27 @@ paths:
               example: '"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"'
         '307':
           description: Temporary redirect to the server hosting this object (locator-api only)
+        '401':
+          description: >
+            Authentication required (only when auth is enabled). From an
+            object server, the `exp`/`sig` query parameters are missing. From
+            the locator, no valid API key was presented.
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+              description: >
+                Sent by the locator. Advertises Basic (username = client
+                name, password = API key) so browsers prompt; a Bearer
+                header carrying the bare key is accepted equally.
+              example: 'Basic realm="simpler-objects", charset="UTF-8"'
+        '403':
+          description: >
+            Not authorized (only when auth is enabled). From an object
+            server, the signature is invalid, expired, or minted for a
+            different operation. From the locator, the authenticated client
+            lacks permission for this operation on this bucket.
         '404':
           description: Object not found
           content:
@@ -296,6 +352,11 @@ paths:
         do not perform the `Expect: 100-continue` handshake even when the header is set
         explicitly — use `aiohttp` with `expect100=True` for clean single-upload behaviour.
       operationId: putObject
+      security:
+      - {}
+      - basicAuth: []
+      - bearerAuth: []
+      - signedUrl: []
       parameters:
       - name: bucket
         in: path
@@ -331,6 +392,8 @@ paths:
             - 100-continue
           title: Expect
         example: 100-continue
+      - $ref: '#/components/parameters/SignedExp'
+      - $ref: '#/components/parameters/SignedSig'
       requestBody:
         required: true
         content:
@@ -349,6 +412,27 @@ paths:
               example: 'sha-256=:LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=:'
         '307':
           description: Temporary redirect to the server where the object should be uploaded (locator-api only)
+        '401':
+          description: >
+            Authentication required (only when auth is enabled). From an
+            object server, the `exp`/`sig` query parameters are missing. From
+            the locator, no valid API key was presented.
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+              description: >
+                Sent by the locator. Advertises Basic (username = client
+                name, password = API key) so browsers prompt; a Bearer
+                header carrying the bare key is accepted equally.
+              example: 'Basic realm="simpler-objects", charset="UTF-8"'
+        '403':
+          description: >
+            Not authorized (only when auth is enabled). From an object
+            server, the signature is invalid, expired, or minted for a
+            different operation. From the locator, the authenticated client
+            lacks permission for this operation on this bucket.
         '400':
           description: Digest mismatch (uploaded content does not match Content-Digest header)
           content:
@@ -430,6 +514,11 @@ paths:
       summary: List Bucket
       description: List all items in a bucket
       operationId: listBucket
+      security:
+      - {}
+      - basicAuth: []
+      - bearerAuth: []
+      - signedUrl: []
       parameters:
       - name: bucket
         in: path
@@ -438,6 +527,8 @@ paths:
           type: string
           title: Bucket
         example: my-bucket
+      - $ref: '#/components/parameters/SignedExp'
+      - $ref: '#/components/parameters/SignedSig'
       responses:
         '200':
           description: Successful Response
@@ -458,6 +549,27 @@ paths:
                     size: null
                     checksum: null
                     content-type: null
+        '401':
+          description: >
+            Authentication required (only when auth is enabled). From an
+            object server, the `exp`/`sig` query parameters are missing. From
+            the locator, no valid API key was presented.
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+              description: >
+                Sent by the locator. Advertises Basic (username = client
+                name, password = API key) so browsers prompt; a Bearer
+                header carrying the bare key is accepted equally.
+              example: 'Basic realm="simpler-objects", charset="UTF-8"'
+        '403':
+          description: >
+            Not authorized (only when auth is enabled). From an object
+            server, the signature is invalid, expired, or minted for a
+            different operation. From the locator, the authenticated client
+            lacks permission for this operation on this bucket.
         '404':
           description: Bucket not found
           content:
@@ -480,6 +592,11 @@ paths:
       summary: Check Bucket Exists
       description: Check if a bucket exists without listing its contents
       operationId: headBucket
+      security:
+      - {}
+      - basicAuth: []
+      - bearerAuth: []
+      - signedUrl: []
       parameters:
       - name: bucket
         in: path
@@ -488,9 +605,32 @@ paths:
           type: string
           title: Bucket
         example: my-bucket
+      - $ref: '#/components/parameters/SignedExp'
+      - $ref: '#/components/parameters/SignedSig'
       responses:
         '200':
           description: Bucket exists
+        '401':
+          description: >
+            Authentication required (only when auth is enabled). From an
+            object server, the `exp`/`sig` query parameters are missing. From
+            the locator, no valid API key was presented.
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+              description: >
+                Sent by the locator. Advertises Basic (username = client
+                name, password = API key) so browsers prompt; a Bearer
+                header carrying the bare key is accepted equally.
+              example: 'Basic realm="simpler-objects", charset="UTF-8"'
+        '403':
+          description: >
+            Not authorized (only when auth is enabled). From an object
+            server, the signature is invalid, expired, or minted for a
+            different operation. From the locator, the authenticated client
+            lacks permission for this operation on this bucket.
         '404':
           description: Bucket not found
         '422':
@@ -523,6 +663,54 @@ paths:
         '403':
           description: Bucket enumeration is not permitted on this server
 components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: >
+        Locator only, enabled by AUTH_CONFIG: username is the client name,
+        password is its API key. Intended for browsers (native prompt).
+        Use only over TLS.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Locator only, enabled by AUTH_CONFIG: the client's API key as a
+        bearer token. Intended for programmatic clients. Use only over TLS.
+    signedUrl:
+      type: apiKey
+      in: query
+      name: sig
+      description: >
+        Object servers only, enabled by CLUSTER_SECRET: HMAC-signed URL
+        (`exp` + `sig` query parameters) minted by the locator — see the
+        SignedExp/SignedSig parameters. Clients obtain one by following the
+        locator's 307 redirect; they never compute signatures themselves.
+  parameters:
+    SignedExp:
+      name: exp
+      in: query
+      required: false
+      schema:
+        type: integer
+      description: >
+        Signed-URL expiry as unix seconds. Minted by the locator (see the
+        `Location` of its 307 responses) and required by object servers when
+        signature enforcement (`CLUSTER_SECRET`) is enabled; ignored
+        otherwise.
+      example: 1720300000
+    SignedSig:
+      name: sig
+      in: query
+      required: false
+      schema:
+        type: string
+        pattern: '^[0-9a-f]{64}$'
+      description: >
+        Hex HMAC-SHA256 signature over the operation, bucket, key, and `exp`.
+        Minted by the locator and required by object servers when signature
+        enforcement (`CLUSTER_SECRET`) is enabled; ignored otherwise.
+      example: 'ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34'
   schemas:
     HTTPValidationError:
       properties:

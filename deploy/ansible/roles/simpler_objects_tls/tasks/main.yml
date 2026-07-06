@@ -1,0 +1,45 @@
+---
+# Distributes operator-provided TLS material (per-host cert/key + private-CA
+# bundle) to {{ simpler_objects_tls_dir }}. Servers need cert+key (and the
+# locator also the CA to verify object servers); the replicator needs only
+# the CA. Everything is conditional so secret-less inventories deploy plain
+# HTTP exactly as before.
+
+- name: Require key alongside certificate
+  ansible.builtin.assert:
+    that: (tls_certfile_src is defined) == (tls_keyfile_src is defined)
+    fail_msg: >
+      `tls_certfile_src` and `tls_keyfile_src` must be set together — a
+      certificate is unusable without its private key (and vice versa).
+    quiet: true
+
+- name: Create TLS directory
+  ansible.builtin.file:
+    path: "{{ simpler_objects_tls_dir }}"
+    state: directory
+    mode: "0700"
+  when: tls_certfile_src is defined or tls_ca_src is defined
+
+- name: Copy host certificate
+  ansible.builtin.copy:
+    src: "{{ tls_certfile_src }}"
+    dest: "{{ simpler_objects_tls_dir }}/host.crt"
+    mode: "0600"
+  when: tls_certfile_src is defined
+  notify: Restart simpler-objects service
+
+- name: Copy host private key
+  ansible.builtin.copy:
+    src: "{{ tls_keyfile_src }}"
+    dest: "{{ simpler_objects_tls_dir }}/host.key"
+    mode: "0600"
+  when: tls_keyfile_src is defined
+  notify: Restart simpler-objects service
+
+- name: Copy CA bundle
+  ansible.builtin.copy:
+    src: "{{ tls_ca_src }}"
+    dest: "{{ simpler_objects_tls_dir }}/ca.pem"
+    mode: "0644"
+  when: tls_ca_src is defined
+  notify: Restart simpler-objects service

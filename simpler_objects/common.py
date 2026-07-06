@@ -2,11 +2,23 @@
 
 import os
 import pathlib
+import ssl
 import string
 import mimetypes
 
 
 _HEX_CHARS = frozenset(string.hexdigits.lower())
+
+
+def httpx_verify(ca_bundle: str):
+    """Return an httpx verify= value for an optional CA bundle path.
+
+    httpx deprecates passing the path as a string; hand it an SSLContext.
+    An empty/unset bundle means the default system trust store.
+    """
+    if not ca_bundle:
+        return True
+    return ssl.create_default_context(cafile=ca_bundle)
 
 
 def check_content_type_extension(key: str, content_type: str | None) -> bool:
