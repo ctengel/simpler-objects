@@ -310,3 +310,75 @@ def test_cli_dash_bucket_uses_underscore_env_var(monkeypatch):
 
     assert exc.value.code == 0
     assert calls == [("my-backups", 5)]
+
+
+# ---------------------------------------------------------------------------
+# Signing and locator credentials (CLUSTER_SECRET / API_KEY)
+# ---------------------------------------------------------------------------
+
+import simpler_objects.async_replicate as async_replicate  # noqa: E402
+from simpler_objects import auth  # noqa: E402
+
+SECRET = "test-cluster-secret"
+
+
+@pytest.fixture()
+def secured(monkeypatch):
+    monkeypatch.setattr(async_replicate, "CLUSTER_SECRET", SECRET)
+    monkeypatch.setattr(async_replicate, "API_KEY", "replicator-key")
+
+
+def _assert_signed(url, operation, bucket=BUCKET, key=""):
+    params = httpx.URL(str(url)).params
+    assert auth.verify(SECRET, operation, bucket, key,
+                       params.get("exp"), params.get("sig"))
+
+
+@respx.mock
+def test_find_space_signs_bucket_probe(secured):
+    health = {"servers": {SERVER_A: _health(), SERVER_B: _health()}}
+    respx.get(LOCATOR + "health").mock(return_value=httpx.Response(200, json=health))
+    route = respx.head(SERVER_B + BUCKET + "/").mock(return_value=httpx.Response(200))
+    result = find_space(LOCATOR, BUCKET, 1024, current=[SERVER_A], desired=1)
+    assert result == [SERVER_B]
+    _assert_signed(route.calls[0].request.url, auth.OP_LIST)
+
+
+@respx.mock
+def test_replicate_object_signs_per_operation(secured):
+    """Source HEAD/GET and dest existence HEAD are 'read'; the PUT is 'write'."""
+    src_head = respx.head(SRC).mock(return_value=httpx.Response(
+        200, headers={"Content-Length": str(len(CONTENT)), "Repr-Digest": CKSUM}))
+    dst_head = respx.head(DST).mock(side_effect=_dst_head_sequence(
+        httpx.Response(404),
+        httpx.Response(200, headers={"Content-Length": str(len(CONTENT)),
+                                     "Repr-Digest": CKSUM})))
+    src_get = respx.get(SRC).mock(return_value=httpx.Response(
+        200, content=CONTENT,
+        headers={"Content-Length": str(len(CONTENT)), "Repr-Digest": CKSUM}))
+    put_route = respx.put(DST).mock(return_value=httpx.Response(201))
+
+    assert replicate_object(SRC, DST, BUCKET, KEY) == len(CONTENT)
+
+    _assert_signed(src_head.calls[0].request.url, auth.OP_READ, key=KEY)
+    _assert_signed(src_get.calls[0].request.url, auth.OP_READ, key=KEY)
+    _assert_signed(dst_head.calls[0].request.url, auth.OP_READ, key=KEY)
+    _assert_signed(put_route.calls[0].request.url, auth.OP_WRITE, key=KEY)
+
+
+@respx.mock
+def test_auto_replica_sends_locator_api_key(secured):
+    contents = {"objects": {}}
+    route = respx.get(LOCATOR + BUCKET + "/").mock(
+        return_value=httpx.Response(200, json=contents))
+    assert auto_replica(LOCATOR, BUCKET, 2) is True
+    assert route.calls[0].request.headers["authorization"] == "Bearer replicator-key"
+
+
+@respx.mock
+def test_no_api_key_means_no_auth_header():
+    contents = {"objects": {}}
+    route = respx.get(LOCATOR + BUCKET + "/").mock(
+        return_value=httpx.Response(200, json=contents))
+    assert auto_replica(LOCATOR, BUCKET, 2) is True
+    assert "authorization" not in route.calls[0].request.headers

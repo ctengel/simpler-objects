@@ -9,8 +9,9 @@ import hashlib
 import fcntl
 import os
 from typing import Annotated
-from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi import Depends, FastAPI, HTTPException, Header, Request
 from fastapi.responses import FileResponse, Response
+from simpler_objects import auth
 from simpler_objects.common import check_content_type_extension
 
 from simpler_objects.common import ChecksumFile
@@ -19,8 +20,33 @@ app = FastAPI()
 
 OBJECT_DIRECTORY = os.environ.get('OBJECT_DIRECTORY', '.')
 READ_ONLY = bool(os.environ.get('READ_ONLY', ''))
+# Shared HMAC secret for signed-URL verification; unset = no enforcement.
+CLUSTER_SECRET = os.environ.get('CLUSTER_SECRET', '')
 BUFFER = 67108864
 RETRY_AFTER = "64"
+
+
+def require_signature(operation):
+    """Dependency factory enforcing a valid signed URL for one operation.
+
+    Reads bucket/key from the matched path params rather than declaring them
+    as function parameters, so the same dependency serves both object and
+    bucket-level routes. Runs before any filesystem access and — critically
+    for PUT — before the request body is consumed, so a rejected upload
+    transfers no data (and a 100-continue client never sends the body).
+    """
+    def dependency(request: Request):
+        if not CLUSTER_SECRET:
+            return
+        exp = request.query_params.get('exp')
+        sig = request.query_params.get('sig')
+        if exp is None or sig is None:
+            raise HTTPException(status_code=401)
+        bucket = request.path_params['bucket']
+        key = request.path_params.get('key', '')
+        if not auth.verify(CLUSTER_SECRET, operation, bucket, key, exp, sig):
+            raise HTTPException(status_code=403)
+    return dependency
 
 
 def safe_path(*parts) -> pathlib.Path:
@@ -88,7 +114,8 @@ def healthcheck():
          'percent': int(float(disk_stats.free)/float(disk_stats.total)*100.0)}
     return r
 
-@app.api_route("/{bucket}/{key}", methods=['GET', 'HEAD'])
+@app.api_route("/{bucket}/{key}", methods=['GET', 'HEAD'],
+               dependencies=[Depends(require_signature(auth.OP_READ))])
 def get_object(bucket: str, key: str):
     """Handle GET requests.
 
@@ -121,7 +148,7 @@ def get_object(bucket: str, key: str):
         headers = {"Repr-Digest": http_digest_head(my_cksum)}
     return FileResponse(path, headers=headers)
 
-@app.put("/{bucket}/{key}")
+@app.put("/{bucket}/{key}", dependencies=[Depends(require_signature(auth.OP_WRITE))])
 async def put_object(bucket: str, key: str, request: Request,
                      content_length: Annotated[int | None, Header()] = None):
     if READ_ONLY:
@@ -179,7 +206,7 @@ def list_buckets():
     """List buckets — not permitted"""
     raise HTTPException(status_code=403)
 
-@app.head("/{bucket}/")
+@app.head("/{bucket}/", dependencies=[Depends(require_signature(auth.OP_LIST))])
 def head_bucket(bucket: str):
     dir_path = safe_path(bucket)
     if not dir_path.is_dir():
@@ -187,7 +214,7 @@ def head_bucket(bucket: str):
     return Response(status_code=200)
 
 
-@app.get("/{bucket}/")
+@app.get("/{bucket}/", dependencies=[Depends(require_signature(auth.OP_LIST))])
 def list_directory(bucket: str):
     """List objects in bucket"""
     dir_path = safe_path(bucket)

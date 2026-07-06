@@ -405,3 +405,88 @@ def test_list_bucket_missing_on_one_server(client):
     resp = client.get(f"/{BUCKET}/")
     assert resp.status_code == 200
     assert "obj1" in resp.json()["objects"]
+
+
+# ---------------------------------------------------------------------------
+# Signed URLs (CLUSTER_SECRET) — probes and Locations carry exp/sig
+# ---------------------------------------------------------------------------
+
+from simpler_objects import auth  # noqa: E402
+
+SECRET = "test-cluster-secret"
+
+
+@pytest.fixture()
+def secured_client(monkeypatch):
+    monkeypatch.setattr(locator, "OBJECT_SERVERS", f"{SERVER_A},{SERVER_B}")
+    monkeypatch.setattr(locator, "CLUSTER_SECRET", SECRET)
+    with ValidatingTestClient(locator.app) as test_client:
+        yield test_client
+
+
+def _assert_signed(url, operation, bucket=BUCKET, key=""):
+    """Assert a URL (httpx.URL or str) carries a valid signature."""
+    params = httpx.URL(str(url)).params
+    assert auth.verify(SECRET, operation, bucket, key,
+                       params.get("exp"), params.get("sig"))
+
+
+@respx.mock
+def test_find_object_location_and_probe_signed(secured_client):
+    route_a = respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(200))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(200))
+    resp = secured_client.get(f"/{OBJ_PATH}", follow_redirects=False)
+    assert resp.status_code == 307
+    location = resp.headers["location"]
+    # The Location must open the object for the client (read op) …
+    _assert_signed(location, auth.OP_READ, key=KEY)
+    # … and the locator's own probe carried the same suffix.
+    if route_a.called:
+        probe_url = route_a.calls[0].request.url
+        assert str(probe_url).endswith(str(httpx.URL(location)).split("?", 1)[1])
+
+
+@respx.mock
+def test_add_object_signs_probes_and_location(secured_client):
+    respx.get(SERVER_A + "health").mock(return_value=httpx.Response(200, json=_health()))
+    respx.get(SERVER_B + "health").mock(return_value=httpx.Response(200, json=_health()))
+    exists_a = respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(404))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    bucket_a = respx.head(SERVER_A + BUCKET + "/").mock(return_value=httpx.Response(200))
+    respx.head(SERVER_B + BUCKET + "/").mock(return_value=httpx.Response(200))
+    resp = secured_client.put(f"/{OBJ_PATH}", headers={"Content-Length": "100"},
+                              follow_redirects=False)
+    assert resp.status_code == 307
+    # Redirect authorizes the client's PUT.
+    _assert_signed(resp.headers["location"], auth.OP_WRITE, key=KEY)
+    # Existence probe is signed as read; bucket probe as list.
+    _assert_signed(exists_a.calls[0].request.url, auth.OP_READ, key=KEY)
+    _assert_signed(bucket_a.calls[0].request.url, auth.OP_LIST)
+
+
+@respx.mock
+def test_head_bucket_probe_signed(secured_client):
+    route = respx.head(SERVER_A + BUCKET + "/").mock(return_value=httpx.Response(200))
+    respx.head(SERVER_B + BUCKET + "/").mock(return_value=httpx.Response(404))
+    assert secured_client.head(f"/{BUCKET}/").status_code == 200
+    _assert_signed(route.calls[0].request.url, auth.OP_LIST)
+
+
+@respx.mock
+def test_list_bucket_fanout_signed(secured_client):
+    payload = {"objects": {}}
+    route = respx.get(SERVER_A + BUCKET + "/").mock(
+        return_value=httpx.Response(200, json=payload))
+    respx.get(SERVER_B + BUCKET + "/").mock(return_value=httpx.Response(200, json=payload))
+    assert secured_client.get(f"/{BUCKET}/").status_code == 200
+    _assert_signed(route.calls[0].request.url, auth.OP_LIST)
+
+
+@respx.mock
+def test_no_secret_means_bare_urls(client):
+    """Without CLUSTER_SECRET the Location has no query — today's contract."""
+    respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(200))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(200))
+    resp = client.get(f"/{OBJ_PATH}", follow_redirects=False)
+    assert resp.status_code == 307
+    assert "?" not in resp.headers["location"]

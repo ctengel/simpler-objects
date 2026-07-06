@@ -213,3 +213,104 @@ def test_get_skips_malformed_checksum_line(uploaded, tmp_path):
     assert resp.status_code == 200
     assert resp.content == TEST_CONTENT
     assert resp.headers["Repr-Digest"] == _expected_digest(TEST_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Signed-URL enforcement (CLUSTER_SECRET) — see simpler_objects/auth.py
+# ---------------------------------------------------------------------------
+
+from simpler_objects import auth  # noqa: E402
+
+SECRET = "test-cluster-secret"
+
+
+@pytest.fixture()
+def secured(client, monkeypatch):
+    """Client against a server with signature enforcement enabled."""
+    monkeypatch.setattr(server, "CLUSTER_SECRET", SECRET)
+    return client
+
+
+def _sq(operation, bucket=BUCKET, key=TEST_FILE, secret=SECRET, ttl=900):
+    """Query suffix like the locator's signed_suffix(), with knobs for tests."""
+    return "?" + auth.signed_query(secret, operation, bucket, key, ttl)
+
+
+def test_signed_put_and_get_round_trip(secured):
+    resp = secured.put(f"/{BUCKET}/{TEST_FILE}" + _sq(auth.OP_WRITE), content=TEST_CONTENT)
+    assert resp.status_code == 201
+    resp = secured.get(f"/{BUCKET}/{TEST_FILE}" + _sq(auth.OP_READ))
+    assert resp.status_code == 200
+    assert resp.content == TEST_CONTENT
+
+
+def test_signed_head_shares_read_signature(secured):
+    """HEAD and GET both map to 'read': one signature serves both."""
+    assert secured.put(f"/{BUCKET}/{TEST_FILE}" + _sq(auth.OP_WRITE),
+                       content=TEST_CONTENT).status_code == 201
+    suffix = _sq(auth.OP_READ)
+    assert secured.head(f"/{BUCKET}/{TEST_FILE}" + suffix).status_code == 200
+    assert secured.get(f"/{BUCKET}/{TEST_FILE}" + suffix).status_code == 200
+
+
+def test_unsigned_requests_rejected_401(secured, tmp_path):
+    assert secured.put(f"/{BUCKET}/{TEST_FILE}", content=TEST_CONTENT).status_code == 401
+    assert not (tmp_path / BUCKET / TEST_FILE).exists()
+    assert secured.get(f"/{BUCKET}/{TEST_FILE}").status_code == 401
+    assert secured.get(f"/{BUCKET}/").status_code == 401
+    assert secured.head(f"/{BUCKET}/").status_code == 401
+
+
+def test_tampered_signature_rejected_403(secured, tmp_path):
+    suffix = _sq(auth.OP_WRITE)
+    bad = suffix[:-1] + ("0" if suffix[-1] != "0" else "1")
+    resp = secured.put(f"/{BUCKET}/{TEST_FILE}" + bad, content=TEST_CONTENT)
+    assert resp.status_code == 403
+    assert not (tmp_path / BUCKET / TEST_FILE).exists()
+
+
+def test_wrong_operation_signature_rejected_403(secured, tmp_path):
+    """A read signature must not authorize a PUT."""
+    resp = secured.put(f"/{BUCKET}/{TEST_FILE}" + _sq(auth.OP_READ), content=TEST_CONTENT)
+    assert resp.status_code == 403
+    assert not (tmp_path / BUCKET / TEST_FILE).exists()
+
+
+def test_wrong_key_signature_rejected_403(secured):
+    """A signature minted for one key must not open another."""
+    assert secured.put(f"/{BUCKET}/{TEST_FILE}" + _sq(auth.OP_WRITE),
+                       content=TEST_CONTENT).status_code == 201
+    stolen = _sq(auth.OP_READ, key="other.bin")
+    assert secured.get(f"/{BUCKET}/{TEST_FILE}" + stolen).status_code == 403
+
+
+def test_expired_signature_rejected_403(secured):
+    expired = _sq(auth.OP_READ, ttl=-(auth.CLOCK_SKEW + 5))
+    assert secured.get(f"/{BUCKET}/{TEST_FILE}" + expired).status_code == 403
+
+
+def test_expiry_within_clock_skew_accepted(secured):
+    assert secured.put(f"/{BUCKET}/{TEST_FILE}" + _sq(auth.OP_WRITE),
+                       content=TEST_CONTENT).status_code == 201
+    just_expired = _sq(auth.OP_READ, ttl=-(auth.CLOCK_SKEW - 30))
+    assert secured.get(f"/{BUCKET}/{TEST_FILE}" + just_expired).status_code == 200
+
+
+def test_signed_bucket_listing(secured):
+    suffix = "?" + auth.signed_query(SECRET, auth.OP_LIST, BUCKET)
+    assert secured.head(f"/{BUCKET}/" + suffix).status_code == 200
+    resp = secured.get(f"/{BUCKET}/" + suffix)
+    assert resp.status_code == 200
+    assert resp.json()["bucket"] == BUCKET
+
+
+def test_health_and_root_stay_open(secured):
+    """Health stays credential-less; bucket enumeration stays 403."""
+    assert secured.get("/health").status_code == 200
+    assert secured.get("/").status_code == 403
+
+
+def test_no_secret_means_no_enforcement(client):
+    """Without CLUSTER_SECRET, unsigned requests work exactly as before."""
+    assert client.put(f"/{BUCKET}/{TEST_FILE}", content=TEST_CONTENT).status_code == 201
+    assert client.get(f"/{BUCKET}/{TEST_FILE}").status_code == 200

@@ -8,12 +8,28 @@ from typing import Annotated
 import httpx
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import RedirectResponse, Response
+from simpler_objects import auth
 from simpler_objects.common import check_content_type_extension, filter_write_candidates
 
 OBJECT_SERVERS = os.environ.get('OBJECT_SERVERS', 'http://localhost:46579/')
+# Shared HMAC secret for signing object-server URLs; unset = no signing.
+CLUSTER_SECRET = os.environ.get('CLUSTER_SECRET', '')
+SIGNED_URL_TTL = int(os.environ.get('SIGNED_URL_TTL', str(auth.DEFAULT_TTL)))
 
 # Fallback Retry-After on a busy 503; matches the object server's own constant.
 RETRY_AFTER = "64"
+
+
+def signed_suffix(operation, bucket, key=""):
+    """Return the '?exp=…&sig=…' suffix for an object-server URL, or ''.
+
+    Used both for the locator's own probes and for the Location it hands the
+    client — the signature covers the operation, so the probe (HEAD) and the
+    client's redirected request (GET or HEAD, both 'read') share one suffix.
+    """
+    if not CLUSTER_SECRET:
+        return ""
+    return "?" + auth.signed_query(CLUSTER_SECRET, operation, bucket, key, SIGNED_URL_TTL)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -62,14 +78,16 @@ async def find_object(bucket: str, key: str):
     busy = False
     retry_after = None
     client = app.state.client
+    # One signature serves every probe and the final Location.
+    suffix = signed_suffix(auth.OP_READ, bucket, key)
     # Sequential by design: randomised order spreads load; first healthy server wins.
     for server in object_servers(randomized=True):
         try:
-            result = await client.head(server + object_path, timeout=1)
+            result = await client.head(server + object_path + suffix, timeout=1)
         except httpx.HTTPError:
             continue
         if result.status_code == 200:
-            return RedirectResponse(url=server + object_path)
+            return RedirectResponse(url=server + object_path + suffix)
         if result.status_code == 503:
             busy = True
             retry_after = result.headers.get("Retry-After", retry_after)
@@ -91,10 +109,11 @@ async def add_object(bucket: str, key: str,
     # TODO use caches of objects and servers but then double check vs checking everybody
     all_obj_servers = object_servers()
     client = app.state.client
+    probe_suffix = signed_suffix(auth.OP_READ, bucket, key)
 
     async def check_exists(server):
         try:
-            result = await client.head(server + object_path, timeout=1)
+            result = await client.head(server + object_path + probe_suffix, timeout=1)
             return server, result.status_code
         except httpx.HTTPError:
             return server, None
@@ -117,9 +136,11 @@ async def add_object(bucket: str, key: str,
         # None or unexpected status (e.g. 500): server broken or unreachable
         candidates.pop(server, None)
 
+    bucket_suffix = signed_suffix(auth.OP_LIST, bucket)
+
     async def check_bucket(server):
         try:
-            result = await client.head(server + bucket + "/", timeout=1)
+            result = await client.head(server + bucket + "/" + bucket_suffix, timeout=1)
             result.raise_for_status()
             return server, True
         except httpx.HTTPError:
@@ -135,7 +156,8 @@ async def add_object(bucket: str, key: str,
     if not candidates:
         raise HTTPException(507)
     server_to_upload = random.choices(list(candidates.keys()), list(candidates.values()))[0]
-    return RedirectResponse(url=server_to_upload+object_path)
+    return RedirectResponse(url=server_to_upload + object_path
+                            + signed_suffix(auth.OP_WRITE, bucket, key))
 
 @app.get("/")
 def list_buckets():
@@ -146,10 +168,11 @@ def list_buckets():
 async def head_bucket(bucket: str):
     """Check if a bucket exists on any server"""
     client = app.state.client
+    suffix = signed_suffix(auth.OP_LIST, bucket)
 
     async def check_server(server):
         try:
-            result = await client.head(server + bucket + "/", timeout=8)
+            result = await client.head(server + bucket + "/" + suffix, timeout=8)
             return result.status_code
         except httpx.HTTPError:
             return None
@@ -169,10 +192,11 @@ async def head_bucket(bucket: str):
 async def list_bucket(bucket: str):
     """List all items in a bucket"""
     client = app.state.client
+    suffix = signed_suffix(auth.OP_LIST, bucket)
 
     async def fetch_server(server):
         try:
-            result = await client.get(server + bucket + '/', timeout=16)
+            result = await client.get(server + bucket + '/' + suffix, timeout=16)
         except httpx.HTTPError:
             return server, None
         return server, result
