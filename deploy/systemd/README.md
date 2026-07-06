@@ -285,3 +285,94 @@ session. If you operate from a separate admin login and `sudo`, two things bite:
   sudo systemctl --user -M <serviceuser>@ list-units 'simpler-objects-*'
   sudo systemctl --user -M <serviceuser>@ status simpler-objects-object-server
   ```
+
+## Auth and TLS
+
+All security is opt-in: leave the variables unset in the env files and the
+cluster speaks plain HTTP with no authentication, exactly as before. The
+pieces layer on independently — enable them in this order and each step is
+reversible on its own:
+
+1. **Signed URLs** — generate one secret (`openssl rand -hex 32`) and set
+   `CLUSTER_SECRET=` in the locator's, replicator's, and *then* each object
+   server's env file (that order is safe: an unsecured object server simply
+   ignores the `exp`/`sig` query parameters the locator starts minting).
+   Once an object server has the secret, its object and bucket endpoints
+   require a valid signature; `/health` stays open.
+2. **Client authentication** — write `~/.config/simpler-objects/auth.toml`
+   (`chmod 600`) mapping API keys to per-bucket permissions, and set
+   `AUTH_CONFIG=` in the locator's env file. The locator refuses to start if
+   `AUTH_CONFIG` is set without `CLUSTER_SECRET`.
+
+   ```toml
+   [clients.oi]
+   key = "<openssl rand -hex 32>"
+   [clients.oi.buckets]
+   photos = ["read", "write", "list"]
+
+   [clients.pv]
+   key = "..."
+   [clients.pv.buckets]
+   "*" = ["read"]              # wildcard: any bucket without an exact entry
+
+   [clients.replicator]        # the async-replicate job's locator identity
+   key = "..."
+   [clients.replicator.buckets]
+   "*" = ["list"]
+   ```
+
+   Programmatic clients send `Authorization: Bearer <key>`; browsers just
+   answer the Basic prompt with the client name and key. The replicator gets
+   its key via `API_KEY=` in `async-replicate.env`.
+3. **TLS** — set `UVICORN_TLS=--ssl-certfile … --ssl-keyfile …` in each
+   server's env file, `CA_BUNDLE=` on the locator and replicator, and switch
+   `OBJECT_SERVERS`/`LOCATOR_URL` to `https://` URLs. Note the API keys and
+   Basic credentials travel in headers — without TLS they are readable on
+   the LAN, so treat steps 1–2 as interim until this one lands.
+
+### Private CA walkthrough
+
+One-time CA (keep `ca.key` offline or on the Ansible control machine only):
+
+```
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout ca.key -out ca.pem -days 3650 \
+    -subj "/CN=simpler-objects CA" \
+    -addext basicConstraints=critical,CA:TRUE,pathlen:0
+```
+
+Per host (repeat for every locator and object server; SAN must match the
+hostname the other nodes use in their URLs):
+
+```
+HOST=pi-storage-1.lan
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout $HOST.key -out $HOST.csr -subj "/CN=$HOST"
+openssl x509 -req -in $HOST.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+    -out $HOST.crt -days 825 \
+    -extfile <(printf "subjectAltName=DNS:%s\nextendedKeyUsage=serverAuth" "$HOST")
+```
+
+Distribute `<host>.crt`/`<host>.key` (mode 600) and `ca.pem` to
+`~/.config/simpler-objects/tls/` on each host (the Ansible
+`simpler_objects_tls` role does this from inventory variables). Import
+`ca.pem` into browsers/OS trust stores to avoid warnings; point `pycurl`
+(`ca_bundle=`), `httpx` (`verify=`), or `curl --cacert` at it for
+programmatic clients.
+
+### Security recovery notes
+
+- **Expired/rotated certificate**: the unit keeps running but clients fail
+  the TLS handshake. Replace the files under `~/.config/simpler-objects/tls/`
+  and `systemctl --user restart` the unit.
+- **Rotating CLUSTER_SECRET**: there is a single secret, so rotation is a
+  restart dance — update every env file, then restart object servers first,
+  locator and replicator last (in-flight signed URLs from the old secret die
+  at the object servers, so expect a brief window of 403s to retried
+  requests).
+- **Lost/leaked API key**: edit `auth.toml`, restart the locator. Signed
+  URLs already handed out remain valid until they expire (default 15 min +
+  60 s skew).
+- Signed URLs appear in uvicorn access logs (`exp`/`sig` query params).
+  They expire quickly, but treat access logs as sensitive or run object
+  servers with `--no-access-log` in `UVICORN_TLS`-style extra flags.

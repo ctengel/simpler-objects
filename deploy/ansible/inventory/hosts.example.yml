@@ -19,7 +19,21 @@ all:
 
     # The one knob you change to upgrade. The playbook pins the package to
     # this git tag; bump it and re-run the playbook to upgrade.
-    simpler_objects_version: v0.4.7
+    simpler_objects_version: v0.5.0
+
+    # --- Security (all optional; omit everything for plain HTTP, no auth) ---
+    # Shared HMAC secret for signed object-server URLs; same value on the
+    # whole cluster. Generate with `openssl rand -hex 32` and KEEP IT IN
+    # ANSIBLE VAULT (ansible-vault encrypt_string), not plaintext:
+    # simpler_objects_cluster_secret: !vault |
+    #   $ANSIBLE_VAULT;1.1;AES256
+    #   ...
+
+    # Per-host TLS material (control-machine paths); distributed to
+    # ~/.config/simpler-objects/tls/ by the simpler_objects_tls role.
+    # Certificate generation is manual — see deploy/systemd/README.md.
+    # Set cert/key per host (below) and the CA here:
+    # tls_ca_src: files/tls/ca.pem
 
   children:
 
@@ -33,6 +47,9 @@ all:
           # object_server_read_only: false
           # object_server_port: 29171
           # object_server_workers: 1
+          # Per-host TLS cert/key (control-machine paths; enables HTTPS):
+          # tls_certfile_src: files/tls/pi-storage-1.lan.crt
+          # tls_keyfile_src: files/tls/pi-storage-1.lan.key
 
         pi-storage-2.lan:
           object_directory: /mnt/usb1/simpler-objects/data
@@ -46,6 +63,27 @@ all:
           # Optional:
           # locator_port: 29164
           # locator_workers: 1
+          # locator_signed_url_ttl: 900
+          # Client API keys + per-bucket permissions (renders auth.toml and
+          # sets AUTH_CONFIG; requires simpler_objects_cluster_secret; keep
+          # the keys in Ansible Vault). Operations: read, write, list;
+          # bucket "*" is a wildcard.
+          # locator_auth_clients:
+          #   oi:
+          #     key: "{{ vault_oi_key }}"
+          #     buckets:
+          #       photos: [read, write, list]
+          #   pv:
+          #     key: "{{ vault_pv_key }}"
+          #     buckets:
+          #       "*": [read]
+          #   replicator:
+          #     key: "{{ vault_replicator_key }}"
+          #     buckets:
+          #       "*": [list]
+          # Per-host TLS cert/key (enables HTTPS):
+          # tls_certfile_src: files/tls/pi-coord.lan.crt
+          # tls_keyfile_src: files/tls/pi-coord.lan.key
 
     replicators:
       hosts:
@@ -59,3 +97,7 @@ all:
           # the role uppercases them for the REPLICAS_<BUCKET>= env var.
           replicate_replicas_overrides:
             backups: 3
+          # API key for the locator's bucket listing (the `replicator`
+          # client above; keep in Vault). The cluster secret from all.vars
+          # covers its direct object-server calls.
+          # replicate_api_key: "{{ vault_replicator_key }}"

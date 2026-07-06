@@ -195,6 +195,21 @@ def simple_upload(filename, url, file_mime, checksum_val=None):
 
 Clients may send `Content-Digest` or `Repr-Digest` with a SHA-256 value (`sha-256=:base64:` format) for integrity verification. The object server returns `400` on mismatch. The `Repr-Digest` header on GET/HEAD responses is present only when a checksum record exists for the object — do not assume it is always included.
 
+### Changes in spec v0.5.0
+
+- **Authentication is available and opt-in** — see the next section. Nothing breaks for unconfigured clusters, but clients targeting a secured cluster must send an API key to the locator, and can no longer hit object servers directly without a signed URL.
+- **New statuses on object/bucket operations**: `401` (no/invalid credentials, or missing `exp`/`sig` at an object server) and `403` (insufficient permissions, or bad/expired signature). Clients should not retry these without fixing credentials.
+- The `Location` of locator `307`s may now carry `exp`/`sig` query parameters. Clients that store or manipulate these URLs must preserve the query string.
+
+### Authentication and TLS (since v0.5.0)
+
+Both are **off by default** — an unconfigured cluster behaves exactly as before. When enabled (see [`deploy/systemd/README.md`](deploy/systemd/README.md) for server setup):
+
+- **API keys at the locator.** Every object and bucket operation on the locator requires an `Authorization` header. Programmatic clients send `Authorization: Bearer <key>`; browsers can simply answer the HTTP Basic prompt with the client name as username and the key as password (`curl -u oi:$KEY` works too). Missing/invalid credentials → `401` with a `WWW-Authenticate: Basic` challenge; a valid client without permission for that bucket/operation → `403`. Keys map to per-bucket permissions of `read` (GET/HEAD object), `write` (PUT), and `list` (bucket listing).
+- **Signed redirect URLs.** The locator's `307 Location` carries `?exp=<unix-seconds>&sig=<hmac>` — a short-lived signed URL (default 15 minutes) the object server accepts with **no credentials**. Just follow the redirect; never send your API key to an object server and never compute signatures yourself. Only the *start* of a request must land inside the validity window, so long transfers are safe. If you save a redirect URL and it expires (e.g. resuming a download), re-request the object from the locator to get a fresh one. Direct object-server requests without a valid signature return `401`/`403`.
+- **`simpler_objects.client`** grows `api_key=` and `ca_bundle=` keyword arguments on `simple_upload`/`simple_download`: the key rides the locator leg as a Bearer header (libcurl drops it on the cross-host redirect, which is correct — the signed URL takes over), and `ca_bundle` points at the private CA's PEM for HTTPS verification.
+- **Use keys only over HTTPS.** Bearer and Basic credentials are plaintext headers; on plain HTTP anyone on the network path can read them.
+
 ### Recentish changes in spec v0.2->v0.4
 
 Since ec8abf9e34b8f5a6b7a25c463c29f71bb2988f91 (February 2026)
@@ -214,6 +229,8 @@ Since ec8abf9e34b8f5a6b7a25c463c29f71bb2988f91 (February 2026)
 ## CORS
 
 CORS headers are not configured by default. Web browsers making cross-origin requests will be blocked. To enable browser access from a different origin, add FastAPI's `CORSMiddleware` or place the service behind a reverse proxy that adds the appropriate `Access-Control-Allow-*` headers. Note that `Repr-Digest` is a non-standard response header and would need to be explicitly listed in `Access-Control-Expose-Headers` for JavaScript clients to read it.
+
+Plain navigation — an `<a href>` link or `<img src>` pointing at the locator — is not subject to CORS and works today: the browser answers the Basic auth prompt once (when auth is enabled) and follows the 307 to the signed URL. Only JavaScript `fetch()`/XHR from another origin needs the CORS configuration above (plus `credentials: "include"` handling).
 
 ## ObjectIndex
 

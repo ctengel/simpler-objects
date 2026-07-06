@@ -1,0 +1,15 @@
+{{ ansible_managed | comment('#') }}
+# Client API keys and per-bucket permissions for the simpler-objects locator.
+# Operations: read (GET/HEAD object), write (PUT object), list (bucket listing).
+# A bucket entry of "*" applies to any bucket without an exact entry.
+{% for name, entry in locator_auth_clients.items() %}
+
+[clients.{{ name }}]
+key = "{{ entry.key }}"
+{% if entry.buckets is defined and entry.buckets %}
+[clients.{{ name }}.buckets]
+{% for bucket, ops in entry.buckets.items() %}
+"{{ bucket }}" = {{ ops | to_json }}
+{% endfor %}
+{% endif %}
+{% endfor %}
