@@ -308,3 +308,107 @@ def test_upload_does_not_send_body_to_locator(servers, tmp_path):
 
     assert counted["up"] < size * 0.05, (
         f"{counted['up']:,} bytes reached the locator — body was not skipped")
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — secured cluster (CLUSTER_SECRET + AUTH_CONFIG)
+# ---------------------------------------------------------------------------
+
+SECRET = "e2e-cluster-secret"
+OI_KEY = "e2e-oi-key"
+
+
+@pytest.fixture(scope="module")
+def secured_servers(tmp_path_factory):
+    """Run an object server + locator with signing and client auth enabled."""
+    obj_dir = tmp_path_factory.mktemp("objects-secured")
+    (obj_dir / BUCKET).mkdir()
+    auth_toml = tmp_path_factory.mktemp("config") / "auth.toml"
+    auth_toml.write_text(f"""
+[clients.oi]
+key = "{OI_KEY}"
+[clients.oi.buckets]
+{BUCKET} = ["read", "write", "list"]
+""")
+    auth_toml.chmod(0o600)
+    obj_port, loc_port = _free_port(), _free_port()
+
+    obj_proc = _spawn("object_server", obj_port,
+                      {"OBJECT_DIRECTORY": str(obj_dir),
+                       "CLUSTER_SECRET": SECRET})
+    loc_proc = _spawn("locator_api", loc_port,
+                      {"OBJECT_SERVERS": f"http://127.0.0.1:{obj_port}/",
+                       "CLUSTER_SECRET": SECRET,
+                       "AUTH_CONFIG": str(auth_toml)})
+    try:
+        if not (_wait_for(f"http://127.0.0.1:{obj_port}/health")
+                and _wait_for(f"http://127.0.0.1:{loc_port}/health")):
+            pytest.skip("could not start secured object server / locator subprocesses")
+        yield {"locator": f"http://127.0.0.1:{loc_port}",
+               "object_server": f"http://127.0.0.1:{obj_port}",
+               "obj_dir": obj_dir}
+    finally:
+        for proc in (loc_proc, obj_proc):
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+def test_secured_upload_download_roundtrip(secured_servers, tmp_path):
+    """Full flow: Bearer key at the locator, signed URL through the 307."""
+    data = os.urandom(2 * 1024 * 1024 + 5)
+    src = tmp_path / "src.bin"
+    src.write_bytes(data)
+    url = _object_url(secured_servers, "sec-rt")
+
+    assert client.simple_upload(str(src), url,
+                                api_key=OI_KEY) == hashlib.sha256(data).digest()
+
+    dst = tmp_path / "dst.bin"
+    digest, _, _, _ = client.simple_download(url, str(dst), api_key=OI_KEY)
+    assert digest == hashlib.sha256(data).digest()
+    assert dst.read_bytes() == data
+
+
+def test_secured_upload_without_key_401(secured_servers, tmp_path):
+    src = tmp_path / "nokey.bin"
+    src.write_bytes(b"data")
+    with pytest.raises(client.ClientError) as excinfo:
+        client.simple_upload(str(src), _object_url(secured_servers, "nokey"))
+    assert excinfo.value.status == 401
+
+
+def test_secured_download_without_key_401(secured_servers, tmp_path):
+    with pytest.raises(client.ClientError) as excinfo:
+        client.simple_download(_object_url(secured_servers, "nokey"),
+                               str(tmp_path / "nokey-dl"))
+    assert excinfo.value.status == 401
+
+
+def test_secured_basic_auth_browser_flow(secured_servers, tmp_path):
+    """A browser-style GET: Basic creds at the locator, bare signed URL after."""
+    data = os.urandom(64 * 1024)
+    src = tmp_path / "basic.bin"
+    src.write_bytes(data)
+    url = _object_url(secured_servers, "basic")
+    client.simple_upload(str(src), url, api_key=OI_KEY)
+
+    resp = httpx.get(url, auth=("oi", OI_KEY), follow_redirects=True)
+    assert resp.status_code == 200
+    assert resp.content == data
+
+
+def test_secured_direct_object_server_needs_signature(secured_servers, tmp_path):
+    """Hitting an object server directly without exp/sig is rejected."""
+    data = os.urandom(1024)
+    src = tmp_path / "direct.bin"
+    src.write_bytes(data)
+    url = _object_url(secured_servers, "direct")
+    client.simple_upload(str(src), url, api_key=OI_KEY)
+    key = url.rsplit("/", 1)[-1]
+
+    direct = f"{secured_servers['object_server']}/{BUCKET}/{key}"
+    assert httpx.get(direct).status_code == 401
+    assert httpx.get(direct + "?exp=9999999999&sig=" + "0" * 64).status_code == 403

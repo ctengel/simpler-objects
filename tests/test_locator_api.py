@@ -490,3 +490,157 @@ def test_no_secret_means_bare_urls(client):
     resp = client.get(f"/{OBJ_PATH}", follow_redirects=False)
     assert resp.status_code == 307
     assert "?" not in resp.headers["location"]
+
+
+# ---------------------------------------------------------------------------
+# Client authn/authz (AUTH_CONFIG) — API keys, Bearer + Basic
+# ---------------------------------------------------------------------------
+
+import base64  # noqa: E402
+
+OI_KEY = "oi-secret-key"
+RO_KEY = "ro-secret-key"
+AUTH_TOML = f"""
+[clients.oi]
+key = "{OI_KEY}"
+[clients.oi.buckets]
+{BUCKET} = ["read", "write", "list"]
+
+[clients.ro]
+key = "{RO_KEY}"
+[clients.ro.buckets]
+{BUCKET} = ["read"]
+"""
+
+
+@pytest.fixture()
+def authed_client(monkeypatch, tmp_path):
+    config = tmp_path / "auth.toml"
+    config.write_text(AUTH_TOML)
+    config.chmod(0o600)
+    monkeypatch.setattr(locator, "OBJECT_SERVERS", f"{SERVER_A},{SERVER_B}")
+    monkeypatch.setattr(locator, "CLUSTER_SECRET", SECRET)
+    monkeypatch.setattr(locator, "AUTH_CONFIG", str(config))
+    with ValidatingTestClient(locator.app) as test_client:
+        yield test_client
+
+
+def _bearer(key):
+    return {"Authorization": f"Bearer {key}"}
+
+
+def _basic(name, key):
+    return {"Authorization": "Basic " + base64.b64encode(f"{name}:{key}".encode()).decode()}
+
+
+def _mock_object_found():
+    respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(200))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(200))
+
+
+@respx.mock
+def test_no_credentials_401_with_challenge(authed_client):
+    resp = authed_client.get(f"/{OBJ_PATH}", follow_redirects=False)
+    assert resp.status_code == 401
+    assert resp.headers["WWW-Authenticate"].startswith("Basic")
+
+
+@respx.mock
+def test_bad_key_401(authed_client):
+    resp = authed_client.get(f"/{OBJ_PATH}", headers=_bearer("wrong-key"),
+                             follow_redirects=False)
+    assert resp.status_code == 401
+
+
+@respx.mock
+def test_basic_wrong_username_401(authed_client):
+    resp = authed_client.get(f"/{OBJ_PATH}", headers=_basic("ro", OI_KEY),
+                             follow_redirects=False)
+    assert resp.status_code == 401
+
+
+@respx.mock
+def test_bearer_read_redirects(authed_client):
+    _mock_object_found()
+    resp = authed_client.get(f"/{OBJ_PATH}", headers=_bearer(OI_KEY),
+                             follow_redirects=False)
+    assert resp.status_code == 307
+    _assert_signed(resp.headers["location"], auth.OP_READ, key=KEY)
+
+
+@respx.mock
+def test_basic_read_redirects(authed_client):
+    """Browser-style Basic auth works and yields the same signed redirect."""
+    _mock_object_found()
+    resp = authed_client.get(f"/{OBJ_PATH}", headers=_basic("oi", OI_KEY),
+                             follow_redirects=False)
+    assert resp.status_code == 307
+    _assert_signed(resp.headers["location"], auth.OP_READ, key=KEY)
+
+
+@respx.mock
+def test_wrong_bucket_403(authed_client):
+    resp = authed_client.get(f"/otherbucket/{KEY}", headers=_bearer(OI_KEY),
+                             follow_redirects=False)
+    assert resp.status_code == 403
+
+
+@respx.mock
+def test_read_only_client_cannot_put(authed_client):
+    resp = authed_client.put(f"/{OBJ_PATH}", headers={**_bearer(RO_KEY),
+                                                      "Content-Length": "100"},
+                             follow_redirects=False)
+    assert resp.status_code == 403
+
+
+@respx.mock
+def test_read_only_client_cannot_list(authed_client):
+    resp = authed_client.get(f"/{BUCKET}/", headers=_bearer(RO_KEY))
+    assert resp.status_code == 403
+
+
+@respx.mock
+def test_list_with_permission(authed_client):
+    payload = {"objects": {}}
+    respx.get(SERVER_A + BUCKET + "/").mock(return_value=httpx.Response(200, json=payload))
+    respx.get(SERVER_B + BUCKET + "/").mock(return_value=httpx.Response(200, json=payload))
+    resp = authed_client.get(f"/{BUCKET}/", headers=_bearer(OI_KEY))
+    assert resp.status_code == 200
+
+
+@respx.mock
+def test_authorized_put_redirects_signed(authed_client):
+    respx.get(SERVER_A + "health").mock(return_value=httpx.Response(200, json=_health()))
+    respx.get(SERVER_B + "health").mock(return_value=httpx.Response(200, json=_health()))
+    respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(404))
+    respx.head(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    respx.head(SERVER_A + BUCKET + "/").mock(return_value=httpx.Response(200))
+    respx.head(SERVER_B + BUCKET + "/").mock(return_value=httpx.Response(200))
+    resp = authed_client.put(f"/{OBJ_PATH}", headers={**_bearer(OI_KEY),
+                                                      "Content-Length": "100"},
+                             follow_redirects=False)
+    assert resp.status_code == 307
+    _assert_signed(resp.headers["location"], auth.OP_WRITE, key=KEY)
+
+
+@respx.mock
+def test_health_stays_open(authed_client):
+    respx.get(SERVER_A + "health").mock(return_value=httpx.Response(200, json=_health()))
+    respx.get(SERVER_B + "health").mock(return_value=httpx.Response(200, json=_health()))
+    assert authed_client.get("/health").status_code == 200
+
+
+def test_root_stays_403(authed_client):
+    assert authed_client.get("/").status_code == 403
+
+
+def test_auth_config_without_cluster_secret_refuses_startup(monkeypatch, tmp_path):
+    """AUTH_CONFIG without CLUSTER_SECRET would hand out forgeable URLs."""
+    config = tmp_path / "auth.toml"
+    config.write_text(AUTH_TOML)
+    monkeypatch.setattr(locator, "OBJECT_SERVERS", f"{SERVER_A},{SERVER_B}")
+    monkeypatch.setattr(locator, "CLUSTER_SECRET", "")
+    monkeypatch.setattr(locator, "AUTH_CONFIG", str(config))
+    with pytest.raises(RuntimeError, match="CLUSTER_SECRET"):
+        with ValidatingTestClient(locator.app):
+            pass

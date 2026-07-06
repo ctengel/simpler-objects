@@ -6,7 +6,7 @@ import random
 from contextlib import asynccontextmanager
 from typing import Annotated
 import httpx
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import Depends, FastAPI, HTTPException, Header, Request
 from fastapi.responses import RedirectResponse, Response
 from simpler_objects import auth
 from simpler_objects.common import check_content_type_extension, filter_write_candidates
@@ -15,9 +15,15 @@ OBJECT_SERVERS = os.environ.get('OBJECT_SERVERS', 'http://localhost:46579/')
 # Shared HMAC secret for signing object-server URLs; unset = no signing.
 CLUSTER_SECRET = os.environ.get('CLUSTER_SECRET', '')
 SIGNED_URL_TTL = int(os.environ.get('SIGNED_URL_TTL', str(auth.DEFAULT_TTL)))
+# Path to the client API-key/permission TOML; unset = no client auth.
+AUTH_CONFIG = os.environ.get('AUTH_CONFIG')
 
 # Fallback Retry-After on a busy 503; matches the object server's own constant.
 RETRY_AFTER = "64"
+
+# Basic is advertised so browsers prompt for client-name/API-key; Bearer with
+# the bare key is accepted equally.
+WWW_AUTHENTICATE = 'Basic realm="simpler-objects", charset="UTF-8"'
 
 
 def signed_suffix(operation, bucket, key=""):
@@ -33,13 +39,39 @@ def signed_suffix(operation, bucket, key=""):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage the lifecycle of the shared object-server HTTP client."""
+    """Manage the shared object-server HTTP client and load the auth config."""
+    if AUTH_CONFIG and not CLUSTER_SECRET:
+        # Refuse the half-secure trap: clients would authenticate here only
+        # to be redirected to unsigned URLs anyone can request directly.
+        raise RuntimeError(
+            "AUTH_CONFIG is set but CLUSTER_SECRET is not; "
+            "set CLUSTER_SECRET on the locator and object servers first")
+    app.state.auth = auth.AuthConfig.load(AUTH_CONFIG) if AUTH_CONFIG else None
     # One pooled client for the whole app, reused across all requests.
     app.state.client = httpx.AsyncClient()
     yield
     await app.state.client.aclose()
 
 app = FastAPI(lifespan=lifespan)
+
+
+def require_permission(operation):
+    """Dependency factory: authenticate the API key, authorize the bucket op.
+
+    No-op when AUTH_CONFIG is unset. Reads the bucket from the matched path
+    params so the same dependency serves object and bucket-level routes.
+    """
+    def dependency(request: Request):
+        config = app.state.auth
+        if config is None:
+            return
+        client_name = config.authenticate(request.headers.get('authorization'))
+        if client_name is None:
+            raise HTTPException(status_code=401,
+                                headers={"WWW-Authenticate": WWW_AUTHENTICATE})
+        if not config.allowed(client_name, request.path_params['bucket'], operation):
+            raise HTTPException(status_code=403)
+    return dependency
 
 def object_servers(randomized=False):
     """Return a randomized list of object server URLs"""
@@ -65,7 +97,8 @@ async def healthcheck():
     healths = await asyncio.gather(*[get_object_server_health(s) for s in servers])
     return {'servers': dict(zip(servers, healths))}
 
-@app.api_route("/{bucket}/{key}", methods=["GET", "HEAD"])
+@app.api_route("/{bucket}/{key}", methods=["GET", "HEAD"],
+               dependencies=[Depends(require_permission(auth.OP_READ))])
 async def find_object(bucket: str, key: str):
     """Return a redirect to an existing object"""
     object_path = f"{bucket}/{key}"
@@ -96,7 +129,7 @@ async def find_object(bucket: str, key: str):
                             headers={"Retry-After": retry_after or RETRY_AFTER})
     raise HTTPException(status_code=404)
 
-@app.put("/{bucket}/{key}")
+@app.put("/{bucket}/{key}", dependencies=[Depends(require_permission(auth.OP_WRITE))])
 async def add_object(bucket: str, key: str,
                      content_length: Annotated[int | None, Header()] = None,
                      content_type: Annotated[str | None, Header()] = None):
@@ -164,7 +197,7 @@ def list_buckets():
     """List buckets — not permitted"""
     raise HTTPException(status_code=403)
 
-@app.head("/{bucket}/")
+@app.head("/{bucket}/", dependencies=[Depends(require_permission(auth.OP_LIST))])
 async def head_bucket(bucket: str):
     """Check if a bucket exists on any server"""
     client = app.state.client
@@ -188,7 +221,7 @@ async def head_bucket(bucket: str):
         raise HTTPException(status_code=503)
     raise HTTPException(status_code=404)
 
-@app.get("/{bucket}/")
+@app.get("/{bucket}/", dependencies=[Depends(require_permission(auth.OP_LIST))])
 async def list_bucket(bucket: str):
     """List all items in a bucket"""
     client = app.state.client

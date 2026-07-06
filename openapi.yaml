@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Simpler Objects API
-  version: 0.4.7
+  version: 0.5.0
   description: >
     Example hash values throughout this spec represent SHA-256("hello"):
     hex `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`,
@@ -61,6 +61,11 @@ paths:
       summary: Get Object
       description: Retrieve an existing object
       operationId: getObject
+      security:
+      - {}
+      - basicAuth: []
+      - bearerAuth: []
+      - signedUrl: []
       parameters:
       - name: bucket
         in: path
@@ -172,6 +177,16 @@ paths:
             Authentication required (only when auth is enabled). From an
             object server, the `exp`/`sig` query parameters are missing. From
             the locator, no valid API key was presented.
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+              description: >
+                Sent by the locator. Advertises Basic (username = client
+                name, password = API key) so browsers prompt; a Bearer
+                header carrying the bare key is accepted equally.
+              example: 'Basic realm="simpler-objects", charset="UTF-8"'
         '403':
           description: >
             Not authorized (only when auth is enabled). From an object
@@ -217,6 +232,11 @@ paths:
       summary: Get Object Metadata
       description: Retrieve metadata for an existing object without downloading it
       operationId: headObject
+      security:
+      - {}
+      - basicAuth: []
+      - bearerAuth: []
+      - signedUrl: []
       parameters:
       - name: bucket
         in: path
@@ -267,6 +287,16 @@ paths:
             Authentication required (only when auth is enabled). From an
             object server, the `exp`/`sig` query parameters are missing. From
             the locator, no valid API key was presented.
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+              description: >
+                Sent by the locator. Advertises Basic (username = client
+                name, password = API key) so browsers prompt; a Bearer
+                header carrying the bare key is accepted equally.
+              example: 'Basic realm="simpler-objects", charset="UTF-8"'
         '403':
           description: >
             Not authorized (only when auth is enabled). From an object
@@ -322,6 +352,11 @@ paths:
         do not perform the `Expect: 100-continue` handshake even when the header is set
         explicitly — use `aiohttp` with `expect100=True` for clean single-upload behaviour.
       operationId: putObject
+      security:
+      - {}
+      - basicAuth: []
+      - bearerAuth: []
+      - signedUrl: []
       parameters:
       - name: bucket
         in: path
@@ -382,6 +417,16 @@ paths:
             Authentication required (only when auth is enabled). From an
             object server, the `exp`/`sig` query parameters are missing. From
             the locator, no valid API key was presented.
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+              description: >
+                Sent by the locator. Advertises Basic (username = client
+                name, password = API key) so browsers prompt; a Bearer
+                header carrying the bare key is accepted equally.
+              example: 'Basic realm="simpler-objects", charset="UTF-8"'
         '403':
           description: >
             Not authorized (only when auth is enabled). From an object
@@ -469,6 +514,11 @@ paths:
       summary: List Bucket
       description: List all items in a bucket
       operationId: listBucket
+      security:
+      - {}
+      - basicAuth: []
+      - bearerAuth: []
+      - signedUrl: []
       parameters:
       - name: bucket
         in: path
@@ -504,6 +554,16 @@ paths:
             Authentication required (only when auth is enabled). From an
             object server, the `exp`/`sig` query parameters are missing. From
             the locator, no valid API key was presented.
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+              description: >
+                Sent by the locator. Advertises Basic (username = client
+                name, password = API key) so browsers prompt; a Bearer
+                header carrying the bare key is accepted equally.
+              example: 'Basic realm="simpler-objects", charset="UTF-8"'
         '403':
           description: >
             Not authorized (only when auth is enabled). From an object
@@ -532,6 +592,11 @@ paths:
       summary: Check Bucket Exists
       description: Check if a bucket exists without listing its contents
       operationId: headBucket
+      security:
+      - {}
+      - basicAuth: []
+      - bearerAuth: []
+      - signedUrl: []
       parameters:
       - name: bucket
         in: path
@@ -550,6 +615,16 @@ paths:
             Authentication required (only when auth is enabled). From an
             object server, the `exp`/`sig` query parameters are missing. From
             the locator, no valid API key was presented.
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+              description: >
+                Sent by the locator. Advertises Basic (username = client
+                name, password = API key) so browsers prompt; a Bearer
+                header carrying the bare key is accepted equally.
+              example: 'Basic realm="simpler-objects", charset="UTF-8"'
         '403':
           description: >
             Not authorized (only when auth is enabled). From an object
@@ -588,6 +663,29 @@ paths:
         '403':
           description: Bucket enumeration is not permitted on this server
 components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: >
+        Locator only, enabled by AUTH_CONFIG: username is the client name,
+        password is its API key. Intended for browsers (native prompt).
+        Use only over TLS.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Locator only, enabled by AUTH_CONFIG: the client's API key as a
+        bearer token. Intended for programmatic clients. Use only over TLS.
+    signedUrl:
+      type: apiKey
+      in: query
+      name: sig
+      description: >
+        Object servers only, enabled by CLUSTER_SECRET: HMAC-signed URL
+        (`exp` + `sig` query parameters) minted by the locator — see the
+        SignedExp/SignedSig parameters. Clients obtain one by following the
+        locator's 307 redirect; they never compute signatures themselves.
   parameters:
     SignedExp:
       name: exp

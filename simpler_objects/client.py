@@ -98,13 +98,18 @@ def _header_collector(store: dict):
 
 # --- public API -------------------------------------------------------------
 
-def simple_upload(filename, url, file_mime=None, checksum_val=None) -> bytes:
+def simple_upload(filename, url, file_mime=None, checksum_val=None,
+                  api_key=None) -> bytes:
     """PUT a local file to a Simpler Objects locator (or object server) URL.
 
     The body is uploaded once: ``Expect: 100-continue`` lets the locator answer
     307 before any body is sent. The file's SHA-256 is sent as Content-Digest
     and verified against the object server's Repr-Digest reply. Returns the
     raw SHA-256 digest. Raises ClientError on HTTP failure or digest mismatch.
+
+    ``api_key`` is sent as ``Authorization: Bearer`` on the locator leg;
+    libcurl drops it on the cross-host redirect, which is fine — the signed
+    URL in the 307 Location is all the object server needs.
     """
     path = pathlib.Path(filename)
     size = path.stat().st_size
@@ -120,11 +125,14 @@ def simple_upload(filename, url, file_mime=None, checksum_val=None) -> bytes:
     curl.setopt(pycurl.FOLLOWLOCATION, 1)
     curl.setopt(pycurl.EXPECT_100_TIMEOUT_MS, _EXPECT_100_TIMEOUT_MS)
     curl.setopt(pycurl.INFILESIZE_LARGE, size)
-    curl.setopt(pycurl.HTTPHEADER, [
+    headers = [
         'Expect: 100-continue',
         f'Content-Type: {file_mime}',
         f'Content-Digest: {encode_digest_header(checksum_val)}',
-    ])
+    ]
+    if api_key:
+        headers.append(f'Authorization: Bearer {api_key}')
+    curl.setopt(pycurl.HTTPHEADER, headers)
     curl.setopt(pycurl.HEADERFUNCTION, _header_collector(response_headers))
     curl.setopt(pycurl.WRITEDATA, io.BytesIO())  # discard the empty 201 body
     try:
@@ -154,13 +162,17 @@ def simple_upload(filename, url, file_mime=None, checksum_val=None) -> bytes:
     return checksum_val
 
 
-def simple_download(url, filename):
+def simple_download(url, filename, api_key=None):
     """GET an object to a local file.
 
     Streams to disk while computing the SHA-256, and verifies it against the
     object server's Repr-Digest reply (raising ClientError on mismatch). Note
     the server returns the digest as ``Repr-Digest``, not ``Content-Digest``.
     Returns ``(digest, mime, sugg_fname, mtime)``.
+
+    ``api_key`` is sent as ``Authorization: Bearer`` on the locator leg;
+    libcurl drops it on the cross-host redirect, which is fine — the signed
+    URL in the 307 Location is all the object server needs.
     """
     path = pathlib.Path(filename)
     response_headers: dict = {}
@@ -169,7 +181,10 @@ def simple_download(url, filename):
     curl.setopt(pycurl.URL, url)
     curl.setopt(pycurl.FOLLOWLOCATION, 1)
     curl.setopt(pycurl.BUFFERSIZE, _DOWNLOAD_BUFFER)
-    curl.setopt(pycurl.HTTPHEADER, ['Want-Content-Digest: sha-256=9'])
+    headers = ['Want-Content-Digest: sha-256=9']
+    if api_key:
+        headers.append(f'Authorization: Bearer {api_key}')
+    curl.setopt(pycurl.HTTPHEADER, headers)
     curl.setopt(pycurl.HEADERFUNCTION, _header_collector(response_headers))
     try:
         with open(path, 'wb') as out:
