@@ -207,9 +207,18 @@ def test_load_rejects_missing_key(tmp_path):
 
 def test_load_rejects_unknown_operation(tmp_path):
     path = tmp_path / "auth.toml"
-    path.write_text("[clients.c]\nkey = 'k'\n[clients.c.buckets]\nb = ['delete']\n")
+    path.write_text("[clients.c]\nkey = 'k'\n[clients.c.buckets]\nb = ['purge']\n")
     with pytest.raises(ValueError):
         auth.AuthConfig.load(path)
+
+
+def test_load_accepts_delete_operation(tmp_path):
+    path = tmp_path / "auth.toml"
+    path.write_text("[clients.c]\nkey = 'k'\n[clients.c.buckets]\nb = ['delete']\n")
+    path.chmod(0o600)
+    config = auth.AuthConfig.load(path)
+    assert config.allowed("c", "b", auth.OP_DELETE)
+    assert not config.allowed("c", "b", auth.OP_READ)
 
 
 def test_load_warns_on_loose_permissions(tmp_path, capsys):

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simpler-objects"
-version = "0.5.0"
+version = "0.6.0"
 description = "A simpler object storage service"
 readme = "README.md"
 requires-python = ">=3.12"

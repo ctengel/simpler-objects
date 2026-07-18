@@ -215,6 +215,11 @@ Every start of `simpler-objects-object-server` runs
 orphan partial file or a garbled `<bucket>.sha256` line, scrub exits non-zero
 and the unit refuses to start.
 
+Deletions trip this preflight too (since v0.6.0): every `DELETE` leaves the
+key's checksum line behind as a stale-entry tombstone, so after any deletion
+the next restart requires the same `--repair-checksums` recovery below. Note
+that repairing erases the tombstones — deleted keys become recreatable again.
+
 On a clean directory this is near-instant. The cost scales with file count.
 
 ### Recovering from a scrub failure

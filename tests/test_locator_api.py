@@ -304,6 +304,64 @@ def test_add_object_content_type_octet_stream_accepted(client):
 
 
 # ---------------------------------------------------------------------------
+# DELETE /{bucket}/{key} — fan-out, not a redirect
+# ---------------------------------------------------------------------------
+
+@respx.mock
+def test_delete_object_success(client):
+    """One holder deleted, the other never had it → 204, both servers asked."""
+    route_a = respx.delete(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(204))
+    route_b = respx.delete(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    resp = client.delete(f"/{OBJ_PATH}")
+    assert resp.status_code == 204
+    assert route_a.called
+    assert route_b.called
+
+
+@respx.mock
+def test_delete_object_replicated(client):
+    """Every replica must go: both servers deleted → 204."""
+    respx.delete(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(204))
+    respx.delete(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(204))
+    assert client.delete(f"/{OBJ_PATH}").status_code == 204
+
+
+@respx.mock
+def test_delete_object_not_found(client):
+    respx.delete(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(404))
+    respx.delete(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    assert client.delete(f"/{OBJ_PATH}").status_code == 404
+
+
+@respx.mock
+def test_delete_object_unreachable_server_503(client):
+    """An unreachable server may still hold a copy — retriable 503, and the
+    reachable server's delete still goes through."""
+    respx.delete(SERVER_A + OBJ_PATH).mock(side_effect=httpx.ConnectError("down"))
+    route_b = respx.delete(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(204))
+    resp = client.delete(f"/{OBJ_PATH}")
+    assert resp.status_code == 503
+    assert "Retry-After" in resp.headers
+    assert route_b.called
+
+
+@respx.mock
+def test_delete_object_mid_upload_503(client):
+    """A 503 (PUT in progress) from any server keeps the delete retriable."""
+    respx.delete(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(503))
+    respx.delete(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    assert client.delete(f"/{OBJ_PATH}").status_code == 503
+
+
+@respx.mock
+def test_delete_object_readonly_server_503(client):
+    """A read-only server (405) refuses to delete its copy → retriable 503."""
+    respx.delete(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(405))
+    respx.delete(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(204))
+    assert client.delete(f"/{OBJ_PATH}").status_code == 503
+
+
+# ---------------------------------------------------------------------------
 # HEAD /{bucket}/
 # ---------------------------------------------------------------------------
 
@@ -483,6 +541,15 @@ def test_list_bucket_fanout_signed(secured_client):
 
 
 @respx.mock
+def test_delete_fanout_signed(secured_client):
+    route_a = respx.delete(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(204))
+    route_b = respx.delete(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    assert secured_client.delete(f"/{OBJ_PATH}").status_code == 204
+    _assert_signed(route_a.calls[0].request.url, auth.OP_DELETE, key=KEY)
+    _assert_signed(route_b.calls[0].request.url, auth.OP_DELETE, key=KEY)
+
+
+@respx.mock
 def test_no_secret_means_bare_urls(client):
     """Without CLUSTER_SECRET the Location has no query — today's contract."""
     respx.head(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(200))
@@ -504,7 +571,7 @@ AUTH_TOML = f"""
 [clients.oi]
 key = "{OI_KEY}"
 [clients.oi.buckets]
-{BUCKET} = ["read", "write", "list"]
+{BUCKET} = ["read", "write", "list", "delete"]
 
 [clients.ro]
 key = "{RO_KEY}"
@@ -621,6 +688,27 @@ def test_authorized_put_redirects_signed(authed_client):
                              follow_redirects=False)
     assert resp.status_code == 307
     _assert_signed(resp.headers["location"], auth.OP_WRITE, key=KEY)
+
+
+@respx.mock
+def test_read_only_client_cannot_delete(authed_client):
+    resp = authed_client.delete(f"/{OBJ_PATH}", headers=_bearer(RO_KEY))
+    assert resp.status_code == 403
+
+
+@respx.mock
+def test_authorized_delete(authed_client):
+    respx.delete(SERVER_A + OBJ_PATH).mock(return_value=httpx.Response(204))
+    respx.delete(SERVER_B + OBJ_PATH).mock(return_value=httpx.Response(404))
+    resp = authed_client.delete(f"/{OBJ_PATH}", headers=_bearer(OI_KEY))
+    assert resp.status_code == 204
+
+
+@respx.mock
+def test_unauthenticated_delete_401(authed_client):
+    resp = authed_client.delete(f"/{OBJ_PATH}")
+    assert resp.status_code == 401
+    assert resp.headers["WWW-Authenticate"].startswith("Basic")
 
 
 @respx.mock

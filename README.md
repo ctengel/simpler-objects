@@ -85,7 +85,7 @@ python -m simpler_objects.scrub /path/to/objects
 python -m simpler_objects.scrub --delete-victims --repair-checksums /path/to/objects
 ```
 
-A "crash victim" is any file in a bucket directory without a matching valid line in `<bucket>.sha256`. The scrub assumes the server is stopped — it doesn't coordinate with a running server.
+A "crash victim" is any file in a bucket directory without a matching valid line in `<bucket>.sha256`. A "stale" entry is the reverse — a valid checksum line whose file is missing. Since v0.6.0 every `DELETE` produces one deliberately (the line is left as a tombstone), so after any deletion the dry-run scrub reports findings and exits nonzero: expect the systemd unit's `ExecStartPre` scrub to hold the next restart until you run `--repair-checksums` (which erases the tombstones — deleted keys become recreatable again). The scrub assumes the server is stopped — it doesn't coordinate with a running server.
 
 ## On-disk format
 
@@ -129,6 +129,8 @@ For cron-based replication scheduling (alternative to the systemd timer), see [`
 ### Redirects (307)
 
 The locator returns `307 Temporary Redirect` for `GET`, `HEAD`, and `PUT` on `/{bucket}/{key}`. Clients must follow redirects and must preserve the original HTTP method — particularly for PUT. Use `curl -L`; verify your HTTP library honours 307 method preservation for non-GET requests.
+
+`DELETE` is the exception: the locator answers it directly (no redirect) — the object may be replicated, so the locator fans the DELETE out to every object server itself. See "Changes in spec v0.6.0" below.
 
 ### `Expect: 100-continue` on PUT
 
@@ -195,6 +197,12 @@ def simple_upload(filename, url, file_mime, checksum_val=None):
 
 Clients may send `Content-Digest` or `Repr-Digest` with a SHA-256 value (`sha-256=:base64:` format) for integrity verification. The object server returns `400` on mismatch. The `Repr-Digest` header on GET/HEAD responses is present only when a checksum record exists for the object — do not assume it is always included.
 
+### Changes in spec v0.6.0
+
+- **`DELETE /{bucket}/{key}` is now supported.** On the locator it is **not a redirect**: the locator sends DELETE to every object server and aggregates — `204` when at least one copy was deleted and every server answered `204` or `404`; `404` when no server held a copy; `503` + `Retry-After` when any server was unreachable, mid-upload, or read-only (a copy may survive — **retry until you get `204` or `404`**, otherwise replication can restore the surviving copy). On a secured cluster the operation requires the new `delete` permission on the bucket.
+- **Deleted keys are permanently write-once.** The object server unlinks the file but keeps the key's `<bucket>.sha256` line as a tombstone; a later `PUT` of the same key returns `409`. (Operators can erase tombstones with `scrub --repair-checksums`; see Post-crash scrub.)
+- **`sha256sum -c` validation** of a bucket that has seen deletions reports the deleted keys as missing files — expected, not corruption.
+
 ### Changes in spec v0.5.0
 
 - **Authentication is available and opt-in** — see the next section. Nothing breaks for unconfigured clusters, but clients targeting a secured cluster must send an API key to the locator, and can no longer hit object servers directly without a signed URL.
@@ -205,7 +213,7 @@ Clients may send `Content-Digest` or `Repr-Digest` with a SHA-256 value (`sha-25
 
 Both are **off by default** — an unconfigured cluster behaves exactly as before. When enabled (see [`deploy/systemd/README.md`](deploy/systemd/README.md) for server setup):
 
-- **API keys at the locator.** Every object and bucket operation on the locator requires an `Authorization` header. Programmatic clients send `Authorization: Bearer <key>`; browsers can simply answer the HTTP Basic prompt with the client name as username and the key as password (`curl -u oi:$KEY` works too). Missing/invalid credentials → `401` with a `WWW-Authenticate: Basic` challenge; a valid client without permission for that bucket/operation → `403`. Keys map to per-bucket permissions of `read` (GET/HEAD object), `write` (PUT), and `list` (bucket listing).
+- **API keys at the locator.** Every object and bucket operation on the locator requires an `Authorization` header. Programmatic clients send `Authorization: Bearer <key>`; browsers can simply answer the HTTP Basic prompt with the client name as username and the key as password (`curl -u oi:$KEY` works too). Missing/invalid credentials → `401` with a `WWW-Authenticate: Basic` challenge; a valid client without permission for that bucket/operation → `403`. Keys map to per-bucket permissions of `read` (GET/HEAD object), `write` (PUT), `list` (bucket listing), and `delete` (DELETE object, since v0.6.0).
 - **Signed redirect URLs.** The locator's `307 Location` carries `?exp=<unix-seconds>&sig=<hmac>` — a short-lived signed URL (default 15 minutes) the object server accepts with **no credentials**. Just follow the redirect; never send your API key to an object server and never compute signatures yourself. Only the *start* of a request must land inside the validity window, so long transfers are safe. If you save a redirect URL and it expires (e.g. resuming a download), re-request the object from the locator to get a fresh one. Direct object-server requests without a valid signature return `401`/`403`.
 - **`simpler_objects.client`** grows `api_key=` and `ca_bundle=` keyword arguments on `simple_upload`/`simple_download`: the key rides the locator leg as a Bearer header (libcurl drops it on the cross-host redirect, which is correct — the signed URL takes over), and `ca_bundle` points at the private CA's PEM for HTTPS verification.
 - **Use keys only over HTTPS.** Bearer and Basic credentials are plaintext headers; on plain HTTP anyone on the network path can read them.

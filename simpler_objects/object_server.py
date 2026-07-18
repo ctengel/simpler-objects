@@ -159,6 +159,12 @@ async def put_object(bucket: str, key: str, request: Request,
 
     path = object_filename(bucket, key)
 
+    # A checksum line with no file is a tombstone left by DELETE: the key is
+    # permanently write-once, so recreating it is refused. (Also protects the
+    # stale line from ever shadowing a fresh digest — lookup is first-match.)
+    if ChecksumFile(path.parent).lookup(key) is not None:
+        raise HTTPException(status_code=409)
+
     # O_EXCL creates the object atomically: an existing key — or a racing
     # same-key PUT that won the create — lands here as 409.
     try:
@@ -200,6 +206,39 @@ async def put_object(bucket: str, key: str, request: Request,
             raise
     finally:
         os.close(fd)
+
+@app.delete("/{bucket}/{key}", dependencies=[Depends(require_signature(auth.OP_DELETE))])
+def delete_object(bucket: str, key: str):
+    """Unlink an object, leaving its checksum line in place as a tombstone.
+
+    The line keeps the key permanently write-once (PUT refuses to recreate
+    it) and is reported by scrub as a stale entry until the operator runs
+    --repair-checksums.
+    """
+    if READ_ONLY:
+        raise HTTPException(status_code=405)
+    path = object_filename(bucket, key)
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404) from None
+    try:
+        # An exclusive lock, tested non-blocking: if a PUT holds the file the
+        # object is mid-upload — fail fast and retriable rather than yanking
+        # the file out from under the writer.
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise HTTPException(status_code=503,
+                                headers={"Retry-After": RETRY_AFTER}) from None
+        # Re-check: a failed PUT or a racing DELETE may have unlinked the
+        # file between the open above and acquiring the lock.
+        if not path.is_file():
+            raise HTTPException(status_code=404)
+        path.unlink()
+    finally:
+        os.close(fd)
+    return Response(status_code=204)
 
 @app.get("/")
 def list_buckets():
