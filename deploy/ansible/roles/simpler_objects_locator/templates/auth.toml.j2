@@ -1,6 +1,7 @@
 {{ ansible_managed | comment('#') }}
 # Client API keys and per-bucket permissions for the simpler-objects locator.
-# Operations: read (GET/HEAD object), write (PUT object), list (bucket listing).
+# Operations: read (GET/HEAD object), write (PUT object), list (bucket listing),
+# delete (DELETE object).
 # A bucket entry of "*" applies to any bucket without an exact entry.
 {% for name, entry in locator_auth_clients.items() %}
 

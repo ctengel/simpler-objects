@@ -194,6 +194,40 @@ async def add_object(bucket: str, key: str,
     return RedirectResponse(url=server_to_upload + object_path
                             + signed_suffix(auth.OP_WRITE, bucket, key))
 
+@app.delete("/{bucket}/{key}", dependencies=[Depends(require_permission(auth.OP_DELETE))])
+async def delete_object(bucket: str, key: str):
+    """Delete an object from every server that holds a copy.
+
+    Unlike GET/HEAD/PUT this is not a redirect: the object may exist on
+    several servers and every copy must go, so the locator issues the
+    DELETEs itself. It sends DELETE to all servers rather than probing for
+    holders first — a server without the object answers a harmless 404, and
+    there is no probe-to-delete race window.
+    """
+    object_path = f"{bucket}/{key}"
+    client = app.state.client
+    suffix = signed_suffix(auth.OP_DELETE, bucket, key)
+
+    async def delete_on(server):
+        try:
+            result = await client.delete(server + object_path + suffix, timeout=8)
+            return result.status_code
+        except httpx.HTTPError:
+            return None
+
+    statuses = await asyncio.gather(*[delete_on(s) for s in object_servers()])
+
+    if any(s not in (204, 404) for s in statuses):
+        # A copy may survive on an unreachable, busy, or read-only server;
+        # only when every server answers 204 or 404 is the deletion complete,
+        # so anything else is retriable. 503, not 502/504: the locator
+        # coordinates object servers but is not itself a gateway/proxy.
+        raise HTTPException(status_code=503,
+                            headers={"Retry-After": RETRY_AFTER})
+    if 204 in statuses:
+        return Response(status_code=204)
+    raise HTTPException(status_code=404)
+
 @app.get("/")
 def list_buckets():
     """List buckets — not permitted"""

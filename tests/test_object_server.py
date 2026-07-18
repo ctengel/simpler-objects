@@ -165,6 +165,50 @@ def test_get_locked_object_returns_503(uploaded, tmp_path):
         os.close(fd)
 
 
+def test_delete(uploaded, tmp_path):
+    """DELETE unlinks the file but leaves the checksum line as a tombstone."""
+    resp = uploaded.delete(f"/{BUCKET}/{TEST_FILE}")
+    assert resp.status_code == 204
+    assert not (tmp_path / BUCKET / TEST_FILE).exists()
+    assert TEST_FILE in (tmp_path / f"{BUCKET}.sha256").read_text()
+    assert uploaded.get(f"/{BUCKET}/{TEST_FILE}").status_code == 404
+
+
+def test_delete_missing_object(client):
+    """DELETE of a key that was never stored returns 404."""
+    resp = client.delete(f"/{BUCKET}/never-stored.bin")
+    assert resp.status_code == 404
+
+
+def test_readonly_delete_rejected(readonly_client, tmp_path):
+    obj_path = tmp_path / BUCKET / TEST_FILE
+    obj_path.write_bytes(TEST_CONTENT)
+    resp = readonly_client.delete(f"/{BUCKET}/{TEST_FILE}")
+    assert resp.status_code == 405
+    assert obj_path.exists()
+
+
+def test_delete_locked_object_returns_503(uploaded, tmp_path):
+    """A DELETE while a PUT holds the exclusive lock returns 503 + Retry-After."""
+    fd = os.open(tmp_path / BUCKET / TEST_FILE, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        resp = uploaded.delete(f"/{BUCKET}/{TEST_FILE}")
+        assert resp.status_code == 503
+        assert resp.headers["Retry-After"] == "64"
+        assert (tmp_path / BUCKET / TEST_FILE).exists()
+    finally:
+        os.close(fd)
+
+
+def test_put_after_delete_conflict(uploaded, tmp_path):
+    """A deleted key is permanently write-once: its tombstone makes PUT 409."""
+    assert uploaded.delete(f"/{BUCKET}/{TEST_FILE}").status_code == 204
+    resp = uploaded.put(f"/{BUCKET}/{TEST_FILE}", content=b"new content")
+    assert resp.status_code == 409
+    assert not (tmp_path / BUCKET / TEST_FILE).exists()
+
+
 def test_put_no_space_returns_507(client, tmp_path, monkeypatch):
     """PUT returns 507 and leaves no partial file when disk is full."""
     def fsync_enospc(fd):
@@ -274,6 +318,29 @@ def test_wrong_operation_signature_rejected_403(secured, tmp_path):
     resp = secured.put(f"/{BUCKET}/{TEST_FILE}" + _sq(auth.OP_READ), content=TEST_CONTENT)
     assert resp.status_code == 403
     assert not (tmp_path / BUCKET / TEST_FILE).exists()
+
+
+def test_signed_delete_round_trip(secured):
+    assert secured.put(f"/{BUCKET}/{TEST_FILE}" + _sq(auth.OP_WRITE),
+                       content=TEST_CONTENT).status_code == 201
+    resp = secured.delete(f"/{BUCKET}/{TEST_FILE}" + _sq(auth.OP_DELETE))
+    assert resp.status_code == 204
+
+
+def test_unsigned_delete_rejected_401(secured, tmp_path):
+    obj_path = tmp_path / BUCKET / TEST_FILE
+    obj_path.write_bytes(TEST_CONTENT)
+    assert secured.delete(f"/{BUCKET}/{TEST_FILE}").status_code == 401
+    assert obj_path.exists()
+
+
+def test_write_signature_does_not_authorize_delete(secured, tmp_path):
+    """A write signature must not authorize a DELETE."""
+    assert secured.put(f"/{BUCKET}/{TEST_FILE}" + _sq(auth.OP_WRITE),
+                       content=TEST_CONTENT).status_code == 201
+    resp = secured.delete(f"/{BUCKET}/{TEST_FILE}" + _sq(auth.OP_WRITE))
+    assert resp.status_code == 403
+    assert (tmp_path / BUCKET / TEST_FILE).exists()
 
 
 def test_wrong_key_signature_rejected_403(secured):

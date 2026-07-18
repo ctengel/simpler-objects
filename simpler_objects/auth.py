@@ -30,6 +30,7 @@ import time
 OP_READ = "read"
 OP_WRITE = "write"
 OP_LIST = "list"
+OP_DELETE = "delete"
 
 # Seconds past `exp` a signature is still accepted, absorbing clock drift
 # between locator and object servers. The effective replay window is
@@ -99,7 +100,7 @@ class AuthConfig:
             if not isinstance(entry.get("key"), str) or not entry["key"]:
                 raise ValueError(f"auth config client {name!r}: missing or empty key")
             for bucket, ops in entry.get("buckets", {}).items():
-                bad = set(ops) - {OP_READ, OP_WRITE, OP_LIST}
+                bad = set(ops) - {OP_READ, OP_WRITE, OP_LIST, OP_DELETE}
                 if bad:
                     raise ValueError(
                         f"auth config client {name!r} bucket {bucket!r}: "

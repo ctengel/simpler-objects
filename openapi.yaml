@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Simpler Objects API
-  version: 0.5.0
+  version: 0.6.0
   description: >
     Example hash values throughout this spec represent SHA-256("hello"):
     hex `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824`,
@@ -446,8 +446,11 @@ paths:
                 detail: Uploaded content does not match the provided Content-Digest header
         '409':
           description: >
-            Object already exists, or a PUT of the same key is currently in
-            progress (object-server only). Keys are immutable once written.
+            Object already exists, a PUT of the same key is currently in
+            progress, or the key was previously deleted (object-server only).
+            Keys are immutable once written and permanently write-once: a
+            deleted key's checksum entry remains as a tombstone, so the key
+            cannot be recreated.
           content:
             application/problem+json:
               schema:
@@ -507,6 +510,100 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
         '500':
           description: Internal server error (object-server only).
+    delete:
+      tags:
+        - Objects
+      summary: Delete Object
+      description: >
+        Delete an object. On an object server the file is unlinked but its
+        checksum entry is left in place as a tombstone: the key is permanently
+        write-once and cannot be recreated (a later PUT of the same key
+        returns `409`), and the entry is reported by the post-crash scrub as
+        stale until the operator runs `--repair-checksums`.
+
+
+        The locator does *not* redirect DELETE (unlike GET/HEAD/PUT): the
+        object may exist on several servers and every copy must go, so the
+        locator sends DELETE to every object server itself and aggregates the
+        results. It returns `204` only when at least one server deleted a copy
+        and every server answered `204` or `404`; any other answer (server
+        unreachable, mid-upload `503`, read-only `405`) yields a retriable
+        `503` because a copy may survive.
+      operationId: deleteObject
+      security:
+      - {}
+      - basicAuth: []
+      - bearerAuth: []
+      - signedUrl: []
+      parameters:
+      - name: bucket
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bucket
+        example: my-bucket
+      - name: key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Key
+        example: document.pdf
+      - $ref: '#/components/parameters/SignedExp'
+      - $ref: '#/components/parameters/SignedSig'
+      responses:
+        '204':
+          description: >
+            Object deleted. From the locator, every server answered and no
+            copy remains anywhere in the cluster.
+        '401':
+          description: >
+            Authentication required (only when auth is enabled). From an
+            object server, the `exp`/`sig` query parameters are missing. From
+            the locator, no valid API key was presented.
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+              description: >
+                Sent by the locator. Advertises Basic (username = client
+                name, password = API key) so browsers prompt; a Bearer
+                header carrying the bare key is accepted equally.
+              example: 'Basic realm="simpler-objects", charset="UTF-8"'
+        '403':
+          description: >
+            Not authorized (only when auth is enabled). From an object
+            server, the signature is invalid, expired, or minted for a
+            different operation. From the locator, the authenticated client
+            lacks permission for this operation on this bucket.
+        '404':
+          description: >
+            Object not found. From the locator, no server holds a copy (the
+            object never existed or was already deleted).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '405':
+          description: Method Not Allowed — server is configured as read-only (object-server only)
+        '422':
+          description: Validation Error
+        '500':
+          description: Internal server error (object-server only).
+        '503':
+          description: >
+            Deletion could not complete. From an object server, a PUT of this
+            key is in progress. From the locator, at least one server did not
+            answer `204` or `404` — a copy may survive — so the DELETE must be
+            retried after the delay in the `Retry-After` header.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Suggested retry delay in seconds
+              example: 64
   /{bucket}/:
     get:
       tags:
