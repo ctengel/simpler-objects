@@ -71,6 +71,16 @@ python -m simpler_objects.async_replicate http://localhost:29164/ bucket 2
 
 For periodic scheduling, see [`deploy/systemd/README.md`](deploy/systemd/README.md) (systemd timer, one per bucket) or [`deploy/cron/README.md`](deploy/cron/README.md) (cron equivalent).
 
+### Evacuating a node
+
+To retire a storage node, set it read-only, then run replication with `--evac` (repeatable for multiple nodes):
+
+```
+python -m simpler_objects.async_replicate http://localhost:29164/ bucket --replicas 2 --evac http://localhost:29172/
+```
+
+Replicas on the evacuating node no longer count toward the replica total and the node is never chosen as a copy destination, so full replacement copies are made on the remaining nodes (the evacuating node is still read from if it holds the only copy). Nothing is deleted; once replication succeeds, remove the node from the locator's `OBJECT_SERVERS` and decommission it.
+
 ## Post-crash scrub
 
 PUTs write the body in place to the final key path. A clean failure (client disconnect, length/digest mismatch, ENOSPC) unlinks the partial file before returning, but a hard crash (`SIGKILL`, power loss, kernel panic) can leave an orphan partial file at a key path — and may also leave a torn fragment in the bucket's `<bucket>.sha256` file.

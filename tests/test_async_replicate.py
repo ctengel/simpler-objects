@@ -291,6 +291,103 @@ def test_auto_replica_continues_past_partial_object():
 
 
 # ---------------------------------------------------------------------------
+# auto_replica --evac (issue #69)
+# ---------------------------------------------------------------------------
+
+SERVER_C = "http://server-c/"
+
+
+def _mock_replication(src_server, dst_server, key):
+    """Mock the replicate_object internals for one src => dst copy; return PUT route."""
+    src = src_server + BUCKET + "/" + key
+    dst = dst_server + BUCKET + "/" + key
+    respx.head(src).mock(return_value=httpx.Response(
+        200, headers={"Content-Length": str(len(CONTENT)), "Repr-Digest": CKSUM},
+    ))
+    respx.head(dst).mock(side_effect=_dst_head_sequence(
+        httpx.Response(404),
+        httpx.Response(200, headers={"Content-Length": str(len(CONTENT)), "Repr-Digest": CKSUM}),
+    ))
+    respx.get(src).mock(return_value=httpx.Response(
+        200, content=CONTENT,
+        headers={"Content-Length": str(len(CONTENT)), "Repr-Digest": CKSUM},
+    ))
+    return respx.put(dst).mock(return_value=httpx.Response(201))
+
+
+@respx.mock
+def test_auto_replica_evac_replica_does_not_count():
+    """A replica on the evacuating node doesn't count: a new copy is made elsewhere."""
+    contents = {"objects": {
+        KEY: {"size": len(CONTENT), "directory": False, "checksum": CKSUM,
+              "locations": [SERVER_A, SERVER_B], "error": False},
+    }}
+    respx.get(LOCATOR + BUCKET + "/").mock(return_value=httpx.Response(200, json=contents))
+    health = {"servers": {SERVER_A: _health(), SERVER_B: _health(), SERVER_C: _health()}}
+    respx.get(LOCATOR + "health").mock(return_value=httpx.Response(200, json=health))
+    respx.head(SERVER_C + BUCKET + "/").mock(return_value=httpx.Response(200))
+    put_route = _mock_replication(SERVER_B, SERVER_C, KEY)
+
+    assert auto_replica(LOCATOR, BUCKET, 2, evacuate=[SERVER_A]) is True
+    assert put_route.called
+    # source must be the surviving replica, not the evacuating node
+    get_calls = [c for c in respx.calls if c.request.method == "GET"
+                 and str(c.request.url).endswith(KEY)]
+    assert all(str(c.request.url).startswith(SERVER_B) for c in get_calls)
+
+
+@respx.mock
+def test_auto_replica_evac_never_a_destination():
+    """Even a writable evac node is never chosen as a copy target."""
+    contents = {"objects": {
+        KEY: {"size": len(CONTENT), "directory": False, "checksum": CKSUM,
+              "locations": [SERVER_B], "error": False},
+    }}
+    respx.get(LOCATOR + BUCKET + "/").mock(return_value=httpx.Response(200, json=contents))
+    # evac node reports write=True (operator forgot read-only) yet must be skipped
+    health = {"servers": {SERVER_A: _health(), SERVER_B: _health(), SERVER_C: _health()}}
+    respx.get(LOCATOR + "health").mock(return_value=httpx.Response(200, json=health))
+    respx.head(SERVER_C + BUCKET + "/").mock(return_value=httpx.Response(200))
+    put_route = _mock_replication(SERVER_B, SERVER_C, KEY)
+
+    assert auto_replica(LOCATOR, BUCKET, 2, evacuate=[SERVER_A]) is True
+    assert put_route.called
+    assert not any(c.request.method == "PUT" and str(c.request.url).startswith(SERVER_A)
+                   for c in respx.calls)
+
+
+@respx.mock
+def test_auto_replica_evac_sole_copy_read_from_evac():
+    """When the evac node holds the only copy it is still used as the source."""
+    contents = {"objects": {
+        KEY: {"size": len(CONTENT), "directory": False, "checksum": CKSUM,
+              "locations": [SERVER_A], "error": False},
+    }}
+    respx.get(LOCATOR + BUCKET + "/").mock(return_value=httpx.Response(200, json=contents))
+    health = {"servers": {SERVER_A: _health(), SERVER_B: _health()}}
+    respx.get(LOCATOR + "health").mock(return_value=httpx.Response(200, json=health))
+    respx.head(SERVER_B + BUCKET + "/").mock(return_value=httpx.Response(200))
+    put_route = _mock_replication(SERVER_A, SERVER_B, KEY)
+
+    # replicas=1: the evac copy doesn't count, so one new copy is made from it
+    assert auto_replica(LOCATOR, BUCKET, 1, evacuate=[SERVER_A]) is True
+    assert put_route.called
+
+
+@respx.mock
+def test_auto_replica_no_evac_unchanged():
+    """Without evacuate, a fully-replicated object triggers no traffic at all."""
+    contents = {"objects": {
+        KEY: {"size": len(CONTENT), "directory": False, "checksum": CKSUM,
+              "locations": [SERVER_A, SERVER_B], "error": False},
+    }}
+    respx.get(LOCATOR + BUCKET + "/").mock(return_value=httpx.Response(200, json=contents))
+
+    assert auto_replica(LOCATOR, BUCKET, 2) is True
+    assert all(c.request.method == "GET" for c in respx.calls)
+
+
+# ---------------------------------------------------------------------------
 # cli env-var override
 # ---------------------------------------------------------------------------
 
@@ -299,7 +396,7 @@ def test_cli_dash_bucket_uses_underscore_env_var(monkeypatch):
     monkeypatch.setenv("REPLICAS_MY_BACKUPS", "5")
     calls = []
 
-    def fake_auto_replica(locator, bucket, replicas):
+    def fake_auto_replica(locator, bucket, replicas, evacuate=()):
         calls.append((bucket, replicas))
         return True
 
@@ -310,3 +407,21 @@ def test_cli_dash_bucket_uses_underscore_env_var(monkeypatch):
 
     assert exc.value.code == 0
     assert calls == [("my-backups", 5)]
+
+
+def test_cli_evac_normalizes_trailing_slash():
+    """--evac URLs get a trailing slash appended and are passed to auto_replica."""
+    calls = []
+
+    def fake_auto_replica(locator, bucket, replicas, evacuate=()):
+        calls.append((bucket, replicas, evacuate))
+        return True
+
+    with patch("simpler_objects.async_replicate.auto_replica", fake_auto_replica), \
+         patch("sys.argv", ["prog", "http://locator/", "mybucket", "--replicas", "2",
+                            "--evac", "http://server-a", "--evac", "http://server-b/"]):
+        with pytest.raises(SystemExit) as exc:
+            cli()
+
+    assert exc.value.code == 0
+    assert calls == [("mybucket", 2, ["http://server-a/", "http://server-b/"])]

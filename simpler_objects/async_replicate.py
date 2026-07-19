@@ -77,8 +77,12 @@ def replicate_bucket(source, dest):
         # TODO check checksum also? (need to convert it)
         assert replicate_object(source + obj, dest + obj) == size[0]
 
-def auto_replica(locator, bucket, replicas):
-    """Just figure out where to put stuff and do it"""
+def auto_replica(locator, bucket, replicas, evacuate=()):
+    """Just figure out where to put stuff and do it
+
+    Replicas on servers in evacuate don't count toward the total and are
+    never chosen as a destination; they are only read as a last resort.
+    """
     res = httpx.get(locator + bucket + '/', timeout=32)
     res.raise_for_status()
     contents = res.json()
@@ -88,10 +92,12 @@ def auto_replica(locator, bucket, replicas):
             warnings.warn(f'Object {name} has an issue.')
             error = True
             continue
-        desired = replicas - len(obj['locations'])
+        active = [loc for loc in obj['locations'] if loc not in evacuate]
+        desired = replicas - len(active)
         if desired < 1:
             continue
-        spaces = find_space(locator, bucket, obj['size'], obj['locations'], desired)
+        spaces = find_space(locator, bucket, obj['size'],
+                            list(obj['locations']) + list(evacuate), desired)
         if not spaces:
             warnings.warn(f'No space to replicate object {name}')
             error = True
@@ -100,7 +106,7 @@ def auto_replica(locator, bucket, replicas):
             warnings.warn('Not enough spaces but will still do some...')
             error = True
         for run in spaces:
-            src = random.choice(obj['locations']) + bucket + '/' + name
+            src = random.choice(active or obj['locations']) + bucket + '/' + name
             dst = run +  bucket + '/' + name
             print(f"{src} => {dst}")
             assert replicate_object(src, dst) == obj['size']
@@ -113,19 +119,25 @@ def cli():
     parser.add_argument("locator")
     parser.add_argument("buckets", nargs="*")
     parser.add_argument("--replicas", type=int)
+    parser.add_argument("--evac", action="append", default=[], metavar="SERVER_URL",
+                        help="object server being evacuated: its replicas don't count"
+                             " toward the total and it is never a copy target (repeatable)")
     args = parser.parse_args()
 
     buckets = args.buckets or os.environ.get("BUCKETS", "").split()
     if not buckets:
         parser.error("specify at least one bucket or set BUCKETS env var")
 
+    evacuate = [url if url.endswith('/') else url + '/' for url in args.evac]
+
     if args.replicas is not None:
-        results = [auto_replica(args.locator, b, args.replicas) for b in buckets]
+        results = [auto_replica(args.locator, b, args.replicas, evacuate) for b in buckets]
     else:
         default_replicas = int(os.environ.get("REPLICAS", "2"))
         results = [
             auto_replica(args.locator, b,
-                         int(os.environ.get(f"REPLICAS_{b.upper().replace('-', '_')}", default_replicas)))
+                         int(os.environ.get(f"REPLICAS_{b.upper().replace('-', '_')}", default_replicas)),
+                         evacuate)
             for b in buckets
         ]
     sys.exit(int(not all(results)))
