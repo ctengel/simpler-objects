@@ -405,7 +405,10 @@ paths:
         '507':
           description: >
             Insufficient storage — no server has enough free space to accept this object
-            (locator), or the disk filled up during write (object-server).
+            (locator), or the object server could not reserve Content-Length bytes before
+            reading the body, or the disk filled up or a quota was hit during write
+            (object-server). The object server preallocates, so this is normally returned
+            before any of the body has been transferred.
           content:
             application/problem+json:
               schema:

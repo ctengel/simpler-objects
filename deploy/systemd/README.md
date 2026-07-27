@@ -143,6 +143,20 @@ Default is 1. To raise it, set `WORKERS=` in the env file. The kernel-level
 `flock` + `O_CREAT|O_EXCL` + `O_APPEND` semantics make multi-worker safe
 across processes sharing the same `OBJECT_DIRECTORY`.
 
+### Preallocation
+
+PUT reserves the object's full `Content-Length` with `posix_fallocate` before
+reading the body, so large objects land contiguously and a disk with no room
+for the object is rejected before any bytes transfer. On by default.
+
+Set `PREALLOCATE=0` in the env file only if `OBJECT_DIRECTORY` is on a
+filesystem with no native preallocation — NFS and some FUSE mounts — where
+glibc falls back to emulating it by writing zeros. On local ext4, xfs, and
+btrfs leave it enabled.
+
+Note that with `WORKERS` raised, each in-flight PUT holds a 64 MiB write
+buffer; size worker count against available RAM accordingly.
+
 ---
 
 ## Locator

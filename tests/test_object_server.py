@@ -44,8 +44,21 @@ def test_put(client):
     assert resp.headers["Repr-Digest"] == expected
 
 
+def test_put_stores_exact_size(client, tmp_path):
+    """A stored object is exactly the body length — no preallocated zero padding."""
+    client.put(f"/{BUCKET}/{TEST_FILE}", content=TEST_CONTENT)
+    stored = tmp_path / BUCKET / TEST_FILE
+    assert stored.stat().st_size == len(TEST_CONTENT)
+    assert stored.read_bytes() == TEST_CONTENT
+
+
 def test_put_length_mismatch(client, tmp_path):
-    """A Content-Length disagreeing with the body returns 400 and leaves no file."""
+    """A Content-Length disagreeing with the body returns 400 and leaves no file.
+
+    Also guards the preallocation path: posix_fallocate extends st_size to the
+    declared length, so a short body must be truncated back to what arrived or
+    this check would pass against a zero-padded file.
+    """
     resp = client.put(
         f"/{BUCKET}/{TEST_FILE}",
         content=TEST_CONTENT,
@@ -173,6 +186,51 @@ def test_put_no_space_returns_507(client, tmp_path, monkeypatch):
     resp = client.put(f"/{BUCKET}/{TEST_FILE}", content=TEST_CONTENT)
     assert resp.status_code == 507
     assert not (tmp_path / BUCKET / TEST_FILE).exists()
+
+
+@pytest.mark.parametrize("errno_value", [errno_mod.ENOSPC, errno_mod.EDQUOT])
+def test_put_prealloc_out_of_space_returns_507(client, tmp_path, monkeypatch, errno_value):
+    """A disk or quota too small for the declared size fails before the body."""
+    def fallocate_fails(fd, offset, length):
+        raise OSError(errno_value, os.strerror(errno_value))
+    monkeypatch.setattr(os, "posix_fallocate", fallocate_fails)
+    resp = client.put(f"/{BUCKET}/{TEST_FILE}", content=TEST_CONTENT)
+    assert resp.status_code == 507
+    assert not (tmp_path / BUCKET / TEST_FILE).exists()
+
+
+@pytest.mark.parametrize("errno_value", [errno_mod.EOPNOTSUPP, errno_mod.EINVAL])
+def test_put_prealloc_unsupported_still_succeeds(client, tmp_path, monkeypatch, errno_value):
+    """A filesystem without preallocation support falls back to a plain write."""
+    def fallocate_unsupported(fd, offset, length):
+        raise OSError(errno_value, os.strerror(errno_value))
+    monkeypatch.setattr(os, "posix_fallocate", fallocate_unsupported)
+    resp = client.put(f"/{BUCKET}/{TEST_FILE}", content=TEST_CONTENT)
+    assert resp.status_code == 201
+    assert resp.headers["Repr-Digest"] == _expected_digest(TEST_CONTENT)
+    assert (tmp_path / BUCKET / TEST_FILE).read_bytes() == TEST_CONTENT
+
+
+def test_put_prealloc_other_oserror_propagates(client, tmp_path, monkeypatch):
+    """An unexpected fallocate failure is not swallowed, and leaves no file."""
+    def fallocate_fails(fd, offset, length):
+        raise OSError(errno_mod.EIO, "I/O error")
+    monkeypatch.setattr(os, "posix_fallocate", fallocate_fails)
+    with pytest.raises(OSError) as exc_info:
+        client.put(f"/{BUCKET}/{TEST_FILE}", content=TEST_CONTENT)
+    assert exc_info.value.errno == errno_mod.EIO
+    assert not (tmp_path / BUCKET / TEST_FILE).exists()
+
+
+def test_put_prealloc_disabled(client, monkeypatch):
+    """PREALLOCATE=0 skips fallocate entirely."""
+    def fallocate_unexpected(fd, offset, length):
+        raise AssertionError("posix_fallocate called with PREALLOCATE off")
+    monkeypatch.setattr(server, "PREALLOCATE", False)
+    monkeypatch.setattr(os, "posix_fallocate", fallocate_unexpected)
+    resp = client.put(f"/{BUCKET}/{TEST_FILE}", content=TEST_CONTENT)
+    assert resp.status_code == 201
+    assert resp.headers["Repr-Digest"] == _expected_digest(TEST_CONTENT)
 
 
 def test_path_traversal_returns_404(tmp_path, monkeypatch):

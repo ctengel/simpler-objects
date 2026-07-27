@@ -19,8 +19,13 @@ app = FastAPI()
 
 OBJECT_DIRECTORY = os.environ.get('OBJECT_DIRECTORY', '.')
 READ_ONLY = bool(os.environ.get('READ_ONLY', ''))
+# One I/O block size for the whole module: the PUT write buffer and the
+# checksum read chunk.
 BUFFER = 67108864
 RETRY_AFTER = "64"
+# Reserve space up front on PUT when Content-Length is known. Off-switch for
+# filesystems where glibc emulates posix_fallocate by writing zeros (e.g. NFS).
+PREALLOCATE = os.environ.get('PREALLOCATE', '1') != '0'
 
 
 def safe_path(*parts) -> pathlib.Path:
@@ -147,9 +152,30 @@ async def put_object(bucket: str, key: str, request: Request,
         fcntl.flock(fd, fcntl.LOCK_EX)
         try:
             request_digest = parse_digest_headers(request.headers)
-            with os.fdopen(fd, "wb", closefd=False) as dst:
+            # The size is known before the first byte arrives, so reserve it in
+            # one go: the object lands contiguously, and a disk too full to hold
+            # it fails now rather than after the whole body has been uploaded.
+            preallocated = PREALLOCATE and content_length is not None and content_length > 0
+            if preallocated:
+                try:
+                    await asyncio.to_thread(os.posix_fallocate, fd, 0, content_length)
+                except OSError as e:
+                    if e.errno in (errno.ENOSPC, errno.EDQUOT):
+                        path.unlink(missing_ok=True)
+                        raise HTTPException(status_code=507) from None
+                    if e.errno not in (errno.EOPNOTSUPP, errno.EINVAL):
+                        raise
+                    # filesystem cannot preallocate — write unallocated
+                    preallocated = False
+            written = 0
+            with os.fdopen(fd, "wb", buffering=BUFFER, closefd=False) as dst:
                 async for chunk in request.stream():
-                    dst.write(chunk)
+                    written += dst.write(chunk)
+            if preallocated:
+                # posix_fallocate extends st_size, so a short body would leave a
+                # zero-padded file that passes the length check below. Give back
+                # the tail the client never filled.
+                os.ftruncate(fd, written)
             # Offload the blocking commit steps (fsync, whole-file hash) so a
             # large upload does not stall the event loop for other requests.
             await asyncio.to_thread(os.fsync, fd)
@@ -163,7 +189,7 @@ async def put_object(bucket: str, key: str, request: Request,
                             headers={"Repr-Digest": http_digest_head(file_digest)})
         except OSError as e:
             path.unlink(missing_ok=True)
-            if e.errno == errno.ENOSPC:
+            if e.errno in (errno.ENOSPC, errno.EDQUOT):
                 raise HTTPException(status_code=507) from None
             raise
         except BaseException:
